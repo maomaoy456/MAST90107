@@ -27,6 +27,10 @@ RQ 对照表：
 
 from __future__ import annotations
 
+import argparse
+import glob
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -423,38 +427,120 @@ def plot_wordclouds(autism_df: pd.DataFrame, treaty_df: pd.DataFrame) -> Figure:
 
 
 # --------------------------------------------------------------------------
-# Streamlit 调用示例（可以直接删掉这部分，仅供参考）
+# CLI 入口（可直接运行）
 # --------------------------------------------------------------------------
-#
-# import streamlit as st
-# from qualtrics_analysis import (
-#     load_survey_data, build_long_format, get_theme_summary, get_nps_summary,
-#     plot_theme_agreement, plot_response_distribution, plot_nps_breakdown,
-#     get_qualitative_responses, plot_wordclouds,
-# )
-#
-# autism_df, treaty_df = load_survey_data("autism.csv", "treaty.csv")
-# long_df = build_long_format(autism_df, treaty_df)
-#
-# st.subheader("主题均分")
-# st.dataframe(get_theme_summary(long_df))
-#
-# st.subheader("NPS 统计")
-# st.dataframe(get_nps_summary(autism_df, treaty_df))
-#
-# st.subheader("主题平均分对比")
-# st.pyplot(plot_theme_agreement(long_df))
-#
-# st.subheader("响应分布")
-# st.pyplot(plot_response_distribution(long_df))
-#
-# st.subheader("NPS 分解")
-# st.pyplot(plot_nps_breakdown(autism_df, treaty_df))
-#
-# st.subheader("开放题回答")
-# for code, df in get_qualitative_responses(autism_df, treaty_df).items():
-#     st.write(code)
-#     st.dataframe(df)
-#
-# st.subheader("词云")
-# st.pyplot(plot_wordclouds(autism_df, treaty_df))
+
+
+def _find_csv_matches(keywords: list[str]) -> list[str]:
+    """在项目目录和 Datasets 目录中寻找可能的 CSV 文件。优先按关键词，其次按所有 CSV。"""
+    search_roots = [".", "Datasets"]
+    expanded = []
+    for root in search_roots:
+        if not Path(root).exists():
+            continue
+        for kw in keywords:
+            expanded.extend(glob.glob(f"{root}/**/*{kw}*.csv", recursive=True))
+            expanded.extend(glob.glob(f"{root}/**/*{kw}*.CSV", recursive=True))
+        expanded.extend(glob.glob(f"{root}/**/*.csv", recursive=True))
+        expanded.extend(glob.glob(f"{root}/**/*.CSV", recursive=True))
+    unique = []
+    for path in expanded:
+        if path not in unique:
+            unique.append(path)
+    return sorted(unique)
+
+
+def _is_qualtrics_csv(path: str) -> bool:
+    """Heuristic check: Qualtrics exports have survey question columns like Q1_1, Q2, Q6.0."""
+    try:
+        df = pd.read_csv(path, nrows=3)
+    except Exception:
+        return False
+    cols = {str(c) for c in df.columns}
+    return any(col in cols for col in ["Q1_1", "Q2", "Q6.0", "Q7.0", "Q8.0", "Q3.0_1", "Q4.0_1"]) or any(
+        col.startswith("Q") for col in cols
+    )
+
+
+def _resolve_input_files(autism_path: str | None, treaty_path: str | None) -> tuple[str, str]:
+    """Resolve input CSV paths, including automatic discovery when paths aren't supplied."""
+    if autism_path and treaty_path:
+        return autism_path, treaty_path
+
+    all_csvs = _find_csv_matches(["autism", "Autism", "autism affirming", "Autism Affirming", "treaty", "Treaty", "understanding treaty", "Understanding Treaty"])
+    qualtrics_candidates = [p for p in all_csvs if _is_qualtrics_csv(p)]
+
+    autism_candidates = [p for p in qualtrics_candidates if any(k.lower() in p.lower() for k in ["autism", "affirming"]) or "0AUTI" in p]
+    treaty_candidates = [p for p in qualtrics_candidates if any(k.lower() in p.lower() for k in ["treaty", "understanding"]) or "0UNDE" in p]
+
+    if not autism_path and autism_candidates:
+        autism_path = autism_candidates[0]
+    if not treaty_path and treaty_candidates:
+        treaty_path = treaty_candidates[0]
+
+    if not autism_path or not treaty_path:
+        raise FileNotFoundError(
+            "Could not find both Qualtrics CSV inputs. Please provide --autism and --treaty, "
+            "or place the exported Qualtrics CSV files in the project folder or in the Datasets folder."
+        )
+    return autism_path, treaty_path
+
+
+def _save_fig(fig: Figure, output_path: str) -> str:
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=200, bbox_inches="tight")
+    return output_path
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Qualtrics survey analysis for the Treaty Series MicroCert programs.")
+    parser.add_argument("--autism", type=str, default=None, help="Path to the Autism Affirming Practice CSV export.")
+    parser.add_argument("--treaty", type=str, default=None, help="Path to the Understanding Treaty CSV export.")
+    parser.add_argument("--output-dir", type=str, default="outputs", help="Directory to save charts and summaries.")
+    parser.add_argument("--show-plots", action="store_true", help="Open generated plots in a window after saving them.")
+    args = parser.parse_args(argv)
+
+    try:
+        autism_input, treaty_input = _resolve_input_files(args.autism, args.treaty)
+    except FileNotFoundError as exc:
+        print(f"Input error: {exc}")
+        return 1
+
+    autism_df, treaty_df = load_survey_data(autism_input, treaty_input)
+    long_df = build_long_format(autism_df, treaty_df)
+
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    theme_summary = get_theme_summary(long_df)
+    nps_summary = get_nps_summary(autism_df, treaty_df)
+    print("Theme summary:\n", theme_summary)
+    print("\nNPS summary:\n", nps_summary)
+
+    chart_paths = {
+        "theme_agreement": _save_fig(plot_theme_agreement(long_df), str(output_dir / "theme_agreement.png")),
+        "response_distribution": _save_fig(plot_response_distribution(long_df), str(output_dir / "response_distribution.png")),
+        "nps_breakdown": _save_fig(plot_nps_breakdown(autism_df, treaty_df), str(output_dir / "nps_breakdown.png")),
+    }
+
+    qualitative = get_qualitative_responses(autism_df, treaty_df)
+    for code, df in qualitative.items():
+        out_path = output_dir / f"qualitative_{code}.csv"
+        df.to_csv(out_path, index=False)
+        print(f"\nSaved qualitative responses for {code} to {out_path}")
+
+    wordcloud_fig = plot_wordclouds(autism_df, treaty_df)
+    chart_paths["wordclouds"] = _save_fig(wordcloud_fig, str(output_dir / "wordclouds.png"))
+
+    print("\nSaved charts:")
+    for name, path in chart_paths.items():
+        print(f"  - {name}: {path}")
+
+    if args.show_plots:
+        plt.show()
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
