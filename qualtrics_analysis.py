@@ -125,422 +125,299 @@ def _apply_chart_style() -> None:
 # RQ1: 数据加载
 # --------------------------------------------------------------------------
 
-def load_survey_data(autism_path: str, treaty_path: str) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """
-    读取两份 Qualtrics 导出的 CSV，并各自打上 Course 标签。
-
-    Qualtrics 导出有 3 行表头：
-        第 1 行 = 列代码 (Q1_1, Q2, ...)   <- 保留作为列名
-        第 2 行 = 完整题目文本             <- 跳过
-        第 3 行 = JSON import IDs          <- 跳过
-    """
-    autism_df = pd.read_csv(autism_path, skiprows=[1, 2])
-    treaty_df = pd.read_csv(treaty_path, skiprows=[1, 2])
-
-    autism_df["Course"] = COURSES[0]
-    treaty_df["Course"] = COURSES[1]
-
-    return autism_df, treaty_df
+def load_survey_data(autism_path: str, treaty_path: str):
+    """Read raw three-header-row Qualtrics CSV exports; input order is fixed."""
+    frames = []
+    for path, course in zip([autism_path, treaty_path], COURSES):
+        frame = pd.read_csv(path, skiprows=[1, 2])
+        frame['Course'] = course
+        frames.append(frame)
+    return tuple(frames)
 
 
-# --------------------------------------------------------------------------
-# RQ2: 长表整理（宽表 -> 长表，供后续统计/画图使用）
-# --------------------------------------------------------------------------
+def get_course_options():
+    return [{'value': None, 'label': '整体 / All courses'}] + [
+        {'value': course, 'label': course} for course in COURSES]
 
-def _to_long(df: pd.DataFrame) -> pd.DataFrame:
-    keep = [c for c in STATEMENTS if c in df.columns]
-    long = df.melt(id_vars=["Course"], value_vars=keep, var_name="Code", value_name="Response")
-    long = long.dropna(subset=["Response"])
-    long["Dimension"] = long["Code"].map(lambda c: STATEMENTS[c][0])
-    long["Statement"] = long["Code"].map(lambda c: STATEMENTS[c][1])
-    long["Score"] = long["Response"].map(LIKERT_MAP)
+
+def _validate_frames(autism_df, treaty_df, course=None):
+    if course is not None and course not in COURSES:
+        raise ValueError(f'Unknown course: {course}')
+    frames, notices = [], []
+    for source, name in zip([autism_df, treaty_df], COURSES):
+        if course is not None and course != name:
+            continue
+        df = source.copy()
+        df['Course'] = name
+        if df.empty:
+            notices.append(f'{name}: 没有问卷记录。')
+        missing = [c for c in [*STATEMENTS, 'Q2', *TEXT_QUESTIONS] if c not in df]
+        if missing:
+            notices.append(f"{name}: 缺少字段 {', '.join(missing)}，对应结果按缺失处理。")
+        for code in STATEMENTS:
+            s = df[code] if code in df else pd.Series(pd.NA, index=df.index, dtype='string')
+            s = s.astype('string').str.strip().replace('', pd.NA)
+            bad = s.notna() & ~s.isin(LIKERT_ORDER)
+            if bad.any():
+                notices.append(f'{name} / {code}: {int(bad.sum())} 条无法识别的 Likert 回答已排除。')
+            df[code] = s.where(s.isin(LIKERT_ORDER))
+        raw = df['Q2'] if 'Q2' in df else pd.Series(pd.NA, index=df.index)
+        raw = raw.astype('string').str.strip().replace('', pd.NA)
+        numeric = pd.to_numeric(raw, errors='coerce')
+        valid = numeric.between(0, 10) & numeric.mod(1).eq(0)
+        invalid = raw.notna() & ~valid.fillna(False)
+        if invalid.any():
+            notices.append(f'{name} / Q2: {int(invalid.sum())} 条非 0–10 整数的回答已排除。')
+        df['Q2'] = numeric.where(valid).astype(float)
+        for code in TEXT_QUESTIONS:
+            raw = df[code] if code in df else pd.Series(pd.NA, index=df.index, dtype='string')
+            df[code] = raw.astype('string').str.strip().replace('', pd.NA)
+        frames.append(df)
+    return frames, notices
+
+
+def _to_long(df):
+    long = df.melt(id_vars=['Course'], value_vars=list(STATEMENTS), var_name='Code', value_name='Response')
+    long = long.dropna(subset=['Response']).copy()
+    long['Dimension'] = long.Code.map(lambda c: STATEMENTS[c][0])
+    long['Statement'] = long.Code.map(lambda c: STATEMENTS[c][1])
+    long['Score'] = long.Response.map(LIKERT_MAP)
     return long
 
 
-def build_long_format(autism_df: pd.DataFrame, treaty_df: pd.DataFrame) -> pd.DataFrame:
-    """把两门课的宽表 Likert 数据合并成一张长表（Course / Dimension / Statement / Score）。"""
-    return pd.concat([_to_long(autism_df), _to_long(treaty_df)], ignore_index=True)
+def build_long_format(autism_df, treaty_df):
+    frames, _ = _validate_frames(autism_df, treaty_df)
+    long = pd.concat([_to_long(df) for df in frames], ignore_index=True)
+    long.attrs['courses'] = COURSES.copy()
+    return long
 
 
-# --------------------------------------------------------------------------
-# RQ3: 汇总统计 — 主题均分 & NPS
-# --------------------------------------------------------------------------
-
-def get_theme_summary(long_df: pd.DataFrame) -> pd.DataFrame:
-    """各课程在四个主题（Engagement / Learning experience / Impact / Assessment）上的平均得分（1-5）。"""
-    dim_means = (
-        long_df.groupby(["Course", "Dimension"])["Score"]
-        .mean()
-        .unstack("Dimension")[DIMENSIONS]
-    )
-    return dim_means.round(2)
+def _courses(long_df):
+    if 'selected_courses' in long_df.attrs:
+        return long_df.attrs['selected_courses']
+    present = long_df.Course.dropna().unique().tolist()
+    return [c for c in COURSES if c in present] if present else long_df.attrs.get('courses', [])
 
 
-def _nps_stats(df: pd.DataFrame) -> pd.Series:
-    s = df["Q2"].dropna()
-    n = len(s)
-    promoters = (s >= 9).sum() / n * 100
-    passives = ((s >= 7) & (s <= 8)).sum() / n * 100
-    detractors = (s <= 6).sum() / n * 100
-    return pd.Series({
-        "n": n,
-        "Promoters %": promoters,
-        "Passives %": passives,
-        "Detractors %": detractors,
-        "NPS": promoters - detractors,
-    })
+def get_theme_summary(long_df):
+    courses = _courses(long_df)
+    if long_df.empty:
+        return pd.DataFrame(index=pd.Index(courses, name='Course'), columns=DIMENSIONS, dtype=float)
+    return long_df.groupby(['Course', 'Dimension']).Score.mean().unstack().reindex(
+        index=courses, columns=DIMENSIONS).round(2)
 
 
-def get_nps_summary(autism_df: pd.DataFrame, treaty_df: pd.DataFrame) -> pd.DataFrame:
-    """各课程的 NPS（Net Promoter Score）分解统计。"""
-    nps_table = pd.DataFrame(
-        {course: _nps_stats(df) for course, df in zip(COURSES, [autism_df, treaty_df])}
-    ).T
-    return nps_table.round(1)
-
-
-# --------------------------------------------------------------------------
-# RQ4: 可视化 1 — 各主题平均分对比（分组柱状图）
-# --------------------------------------------------------------------------
-
-def plot_theme_agreement(long_df: pd.DataFrame) -> Figure:
-    """两门课在四个主题上的平均得分，分组柱状图。"""
-    _apply_chart_style()
-    dim_means = get_theme_summary(long_df)
-
-    fig, ax = plt.subplots(figsize=(8, 4.5))
-    x = np.arange(len(DIMENSIONS))
-    width = 0.35
-
-    for i, course in enumerate(COURSES):
-        vals = dim_means.loc[course].values
-        offset = (i - 0.5) * width
-        bars = ax.bar(x + offset, vals, width=width, color=COURSE_COLORS[course], label=course,
-                       edgecolor="#fcfcfb", linewidth=1)
-        for rect, v in zip(bars, vals):
-            ax.text(rect.get_x() + rect.get_width() / 2, v + 0.05, f"{v:.2f}",
-                     ha="center", va="bottom", fontsize=8.5)
-
-    ax.set_xticks(x)
-    ax.set_xticklabels(DIMENSIONS)
-    ax.set_ylim(0, 5.6)
-    ax.set_ylabel("Mean agreement (1=Strongly disagree, 5=Strongly agree)")
-    ax.set_title("Average agreement by theme, per MicroCert")
-    ax.spines[["top", "right"]].set_visible(False)
-    ax.grid(axis="x", visible=False)
-    ax.legend(frameon=False, loc="lower right")
-    fig.tight_layout()
-    return fig
-
-
-# --------------------------------------------------------------------------
-# RQ5: 可视化 2 — 响应分布（发散条形图，两门课在同一张图里对比）
-# --------------------------------------------------------------------------
-
-def plot_response_distribution(long_df: pd.DataFrame) -> Figure:
-    """
-    每个主题 x 每门课一行的发散条形图：
-    不同意在左侧，同意在右侧，"中立"从中间对半分开。
-    """
-    _apply_chart_style()
-
-    counts = long_df.groupby(["Course", "Dimension", "Response"]).size().unstack("Response", fill_value=0)
-    counts = counts.reindex(columns=LIKERT_ORDER, fill_value=0)
-    pct = counts.div(counts.sum(axis=1), axis=0) * 100
-
+def _nps_table(frames):
     rows = []
-    y = 0
-    group_gap = 0.7
-    for dim in reversed(DIMENSIONS):
-        for course in COURSES:
-            rows.append((dim, course, y))
-            y += 1
-        y += group_gap
-
-    fig, ax = plt.subplots(figsize=(10, 5.5))
-
-    for dim, course, ypos in rows:
-        row = pct.loc[(course, dim)]
-        sd_r, sld_r = round(row["Strongly disagree"]), round(row["Slightly disagree"])
-        sla_r, sa_r = round(row["Slightly agree"]), round(row["Strongly agree"])
-        neutral_half = row["Neither agree nor disagree"] / 2
-
-        agree_label = sla_r + sa_r
-        disagree_label = sd_r + sld_r
-        disagree_components = sum(1 for v in (row["Strongly disagree"], row["Slightly disagree"]) if v > 0)
-        label_y_offset = {"Strongly disagree": 0.18, "Slightly disagree": -0.18} if disagree_components >= 2 else {}
-
-        cur = -(row["Strongly disagree"] + row["Slightly disagree"] + neutral_half)
-        segs = [
-            ("Strongly disagree", row["Strongly disagree"], sd_r, "always"),
-            ("Slightly disagree", row["Slightly disagree"], sld_r, "always"),
-            ("Neither agree nor disagree", neutral_half, None, "never"),
-            ("Neither agree nor disagree", neutral_half, None, "never"),
-            ("Slightly agree", row["Slightly agree"], sla_r, "threshold"),
-            ("Strongly agree", row["Strongly agree"], sa_r, "threshold"),
-        ]
-        for label, w, w_r, rule in segs:
-            if w > 0:
-                ax.barh(ypos, w, left=cur, height=0.75, color=LIKERT_COLORS[label],
-                        edgecolor="#fcfcfb", linewidth=1)
-                show = (rule == "always") or (rule == "threshold" and w >= AGREE_LABEL_THRESHOLD)
-                if show:
-                    text_color = LIKERT_TEXT_COLOR[label] if w >= 4 else "#0b0b0b"
-                    ax.text(cur + w / 2, ypos + label_y_offset.get(label, 0), f"{w_r:.0f}%",
-                            ha="center", va="center", fontsize=8, color=text_color, clip_on=False)
-            cur += w
-
-        right_end = row["Slightly agree"] + row["Strongly agree"] + neutral_half
-        left_end = -(row["Strongly disagree"] + row["Slightly disagree"] + neutral_half)
-        ax.text(right_end + 2, ypos, f"{agree_label:.0f}% agree", va="center", ha="left",
-                fontsize=8.5, color="#0b0b0b", clip_on=False)
-        if disagree_components >= 2:
-            ax.text(left_end - 2, ypos, f"{disagree_label:.0f}% disagree", va="center", ha="right",
-                    fontsize=8.5, color="#0b0b0b", clip_on=False)
-
-    ax.axvline(0, color="#898781", linewidth=1)
-    ax.set_yticks([r[2] for r in rows])
-    ax.set_yticklabels([COURSE_SHORT[r[1]] for r in rows])
-
-    theme_rows: dict[str, list[float]] = {}
-    for dim, course, ypos in rows:
-        theme_rows.setdefault(dim, []).append(ypos)
-    for dim, ys in theme_rows.items():
-        ax.text(-0.14, sum(ys) / len(ys), dim, transform=ax.get_yaxis_transform(),
-                ha="right", va="center", fontsize=10.5, fontweight="bold", color="#0b0b0b")
-
-    ax.set_xlim(-40, 112)
-    ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda v, pos: f"{abs(v):.0f}%"))
-    ax.set_ylim(-0.6, y - group_gap + 0.6)
-    ax.spines[["top", "right", "left"]].set_visible(False)
-    ax.grid(axis="y", visible=False)
-    ax.set_title("Response distribution by theme (% of responses)", fontsize=12, pad=14)
-
-    handles = [plt.Rectangle((0, 0), 1, 1, color=LIKERT_COLORS[l]) for l in LIKERT_ORDER]
-    ax.legend(handles, LIKERT_ORDER, loc="upper center", ncol=5, frameon=False, bbox_to_anchor=(0.5, -0.08))
-    fig.tight_layout()
-    return fig
+    for name, df in frames:
+        s = df.Q2.dropna()
+        n = len(s)
+        pro = (s >= 9).mean()*100 if n else np.nan
+        pas = s.between(7, 8).mean()*100 if n else np.nan
+        det = (s <= 6).mean()*100 if n else np.nan
+        rows.append({'Course': name, 'n': n, 'Promoters %': pro, 'Passives %': pas,
+                     'Detractors %': det, 'NPS': pro-det})
+    return pd.DataFrame(rows).set_index('Course').round(1)
 
 
-# --------------------------------------------------------------------------
-# RQ6: 可视化 3 — Net Promoter Score 分解
-# --------------------------------------------------------------------------
+def get_nps_summary(autism_df, treaty_df):
+    frames, _ = _validate_frames(autism_df, treaty_df)
+    return _nps_table(list(zip(COURSES, frames)))
 
-def plot_nps_breakdown(autism_df: pd.DataFrame, treaty_df: pd.DataFrame) -> Figure:
-    """Promoters / Passives / Detractors 占比，以及每门课的 NPS 值。"""
+
+def _empty(ax, message='No valid responses'):
+    ax.text(.5, .5, message, ha='center', va='center', transform=ax.transAxes)
+    ax.set_axis_off()
+
+
+def plot_theme_agreement(long_df):
     _apply_chart_style()
-    nps_table = get_nps_summary(autism_df, treaty_df)
+    table = get_theme_summary(long_df)
+    fig, ax = plt.subplots(figsize=(9, 4.5), layout='constrained')
+    if table.empty or table.isna().all().all():
+        _empty(ax); return fig
+    width = .75 / len(table)
+    for i, (course, row) in enumerate(table.iterrows()):
+        positions = np.arange(len(DIMENSIONS)) + (i-(len(table)-1)/2)*width
+        ax.bar(positions, row, width=width, color=COURSE_COLORS[course], label=course)
+        for x, value in zip(positions, row):
+            ax.text(x, value+.05 if pd.notna(value) else .1, f'{value:.2f}' if pd.notna(value) else 'N/A', ha='center', fontsize=8)
+    ax.set(xticks=np.arange(4), xticklabels=DIMENSIONS, ylim=(0,5.6), ylabel='Mean agreement (1–5)', title='Average agreement by theme')
+    ax.legend(loc='lower right'); return fig
 
-    fig, ax = plt.subplots(figsize=(7, 3.8))
-    y = np.arange(len(COURSES))
-    for i, course in enumerate(COURSES):
-        row = nps_table.loc[course]
-        left = 0
-        for label in ["Detractors", "Passives", "Promoters"]:
-            val = row[f"{label} %"]
-            ax.barh(i, val, left=left, color=STATUS_COLORS[label], height=0.5, edgecolor="#fcfcfb", linewidth=1)
-            if val > 5:
-                text_color = "white" if label != "Passives" else "#0b0b0b"
-                ax.text(left + val / 2, i, f"{val:.0f}%", ha="center", va="center", fontsize=9, color=text_color)
-            left += val
-        ax.text(103, i, f"NPS {row['NPS']:+.0f}  (n={int(row['n'])})", va="center", ha="left", fontsize=9.5)
 
-    ax.set_yticks(y)
-    ax.set_yticklabels(COURSES)
-    ax.set_xlim(0, 100)
-    ax.set_xlabel("Share of respondents (%)")
-    ax.set_title("Net Promoter Score breakdown")
-    ax.spines[["top", "right", "left"]].set_visible(False)
-    ax.grid(axis="y", visible=False)
-    handles = [plt.Rectangle((0, 0), 1, 1, color=STATUS_COLORS[l]) for l in ["Detractors", "Passives", "Promoters"]]
-    ax.legend(handles, ["Detractors (0-6)", "Passives (7-8)", "Promoters (9-10)"], loc="upper center",
-              bbox_to_anchor=(0.5, -0.18), ncol=3, frameon=False)
-    fig.tight_layout()
+def _response_table(long_df):
+    index = pd.MultiIndex.from_product([_courses(long_df), DIMENSIONS], names=['Course','Dimension'])
+    if long_df.empty:
+        counts = pd.DataFrame(0, index=index, columns=LIKERT_ORDER)
+    else:
+        counts = long_df.groupby(['Course','Dimension','Response']).size().unstack(fill_value=0).reindex(index=index, columns=LIKERT_ORDER, fill_value=0)
+    return counts.div(counts.sum(axis=1).replace(0, np.nan), axis=0)*100
+
+
+def plot_response_distribution(long_df):
+    _apply_chart_style()
+    pct = _response_table(long_df)
+    fig, ax = plt.subplots(figsize=(11, max(3.5, len(pct)*.65)), layout='constrained')
+    if pct.empty:
+        _empty(ax); return fig
+    for y, (_, row) in enumerate(pct.iterrows()):
+        if row.isna().all():
+            ax.text(2,y,'No valid responses', va='center'); continue
+        left = -(row.iloc[0]+row.iloc[1]+row.iloc[2]/2)
+        for label in LIKERT_ORDER:
+            w = row[label]
+            ax.barh(y,w,left=left,color=LIKERT_COLORS[label],height=.7)
+            if w >= 8: ax.text(left+w/2,y,f'{w:.0f}%',ha='center',va='center',fontsize=8)
+            left += w
+    ax.axvline(0,color='gray')
+    ax.set(yticks=np.arange(len(pct)), yticklabels=[f'{d} — {COURSE_SHORT[c]}' for c,d in pct.index],
+           xlim=(-105,105),title='Response distribution (% of valid item responses)')
+    ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda v,p:f'{abs(v):.0f}%'))
+    ax.legend([plt.Rectangle((0,0),1,1,color=LIKERT_COLORS[l]) for l in LIKERT_ORDER],LIKERT_ORDER,
+              loc='upper center',bbox_to_anchor=(.5,-.08),ncol=3,frameon=False)
     return fig
 
 
-# --------------------------------------------------------------------------
-# RQ7: 开放题文本
-# --------------------------------------------------------------------------
-
-def get_qualitative_responses(
-    autism_df: pd.DataFrame, treaty_df: pd.DataFrame
-) -> dict[str, pd.DataFrame]:
-    """
-    返回 {题目代码: 合并后的两课回答 DataFrame}，题目见 TEXT_QUESTIONS：
-        Q6.0 -> How they'll apply it
-        Q7.0 -> Best aspects
-        Q8.0 -> Areas to improve
-    """
-    result = {}
-    for code in TEXT_QUESTIONS:
-        combined = pd.concat([
-            autism_df[["Course", code]].rename(columns={code: "Response"}),
-            treaty_df[["Course", code]].rename(columns={code: "Response"}),
-        ]).dropna(subset=["Response"]).reset_index(drop=True)
-        result[code] = combined
-    return result
+def _plot_nps(table):
+    _apply_chart_style()
+    fig, ax = plt.subplots(figsize=(9,3.8),layout='constrained')
+    for y, (course,row) in enumerate(table.iterrows()):
+        if row['n']==0:
+            ax.text(2,y,'No valid NPS responses',va='center'); continue
+        left=0
+        for label in ['Detractors','Passives','Promoters']:
+            value=row[label+' %']
+            ax.barh(y,value,left=left,color=STATUS_COLORS[label],height=.5)
+            if value>5: ax.text(left+value/2,y,f'{value:.0f}%',ha='center',va='center')
+            left+=value
+        ax.text(102,y,f"NPS {row['NPS']:+.1f}; n={int(row['n'])}",va='center')
+    ax.set(yticks=np.arange(len(table)),yticklabels=table.index,xlim=(0,135),xticks=[0,25,50,75,100],xlabel='Respondents (%)',title='Net Promoter Score breakdown')
+    ax.legend([plt.Rectangle((0,0),1,1,color=STATUS_COLORS[l]) for l in ['Detractors','Passives','Promoters']],
+              ['Detractors (0–6)','Passives (7–8)','Promoters (9–10)'],loc='upper center',bbox_to_anchor=(.5,-.18),ncol=3)
+    return fig
 
 
-# --------------------------------------------------------------------------
-# RQ8: 词云
-# --------------------------------------------------------------------------
+def plot_nps_breakdown(autism_df, treaty_df):
+    return _plot_nps(get_nps_summary(autism_df,treaty_df))
 
-def plot_wordclouds(autism_df: pd.DataFrame, treaty_df: pd.DataFrame) -> Figure:
-    """
-    对 TEXT_QUESTIONS 里的每个开放题，各课程画一张词云。
-    蓝色 = Autism Affirming Practice，橙色 = Understanding Treaty。
-    需要 `pip install wordcloud`。
-    """
+
+def _texts(frames):
+    return {code:pd.concat([df[['Course',code]].rename(columns={code:'Response'}) for df in frames],ignore_index=True).dropna(subset=['Response']).reset_index(drop=True) for code in TEXT_QUESTIONS}
+
+
+def get_qualitative_responses(autism_df,treaty_df):
+    frames,_=_validate_frames(autism_df,treaty_df)
+    return _texts(frames)
+
+
+def _wordclouds(frames, names):
     from wordcloud import WordCloud, STOPWORDS
-    from matplotlib.colors import LinearSegmentedColormap
-
     _apply_chart_style()
-
-    extra_stopwords = {"nil", "na", "n/a", "none", "will", "course", "etc"}
-    stop = STOPWORDS.union(extra_stopwords)
-
-    def course_colormap(hex_color: str) -> LinearSegmentedColormap:
-        return LinearSegmentedColormap.from_list("course", ["#c9c9c9", hex_color])
-
-    fig, axes = plt.subplots(len(TEXT_QUESTIONS), len(COURSES), figsize=(11, 3.75 * len(TEXT_QUESTIONS)))
-    for r, (code, label) in enumerate(TEXT_QUESTIONS.items()):
-        for c, course in enumerate(COURSES):
-            df = autism_df if course == COURSES[0] else treaty_df
-            text = " ".join(df[code].dropna().astype(str).tolist())
-            ax = axes[r, c]
-            if not text.strip():
-                ax.axis("off")
-                continue
-            wc = WordCloud(
-                width=800, height=500, background_color="#fcfcfb",
-                colormap=course_colormap(COURSE_COLORS[course]),
-                stopwords=stop, collocations=False, prefer_horizontal=0.95,
-                max_words=60, random_state=42,
-            ).generate(text)
-            ax.imshow(wc, interpolation="bilinear")
-            ax.axis("off")
-            ax.set_title(f"{course}\n{label} ({code})", fontsize=10)
-
-    fig.tight_layout()
-    return fig
-
-
-# --------------------------------------------------------------------------
-# CLI 入口（可直接运行）
-# --------------------------------------------------------------------------
-
-
-def _find_csv_matches(keywords: list[str]) -> list[str]:
-    """在项目目录和 Datasets 目录中寻找可能的 CSV 文件。优先按关键词，其次按所有 CSV。"""
-    search_roots = [".", "Datasets"]
-    expanded = []
-    for root in search_roots:
-        if not Path(root).exists():
-            continue
-        for kw in keywords:
-            expanded.extend(glob.glob(f"{root}/**/*{kw}*.csv", recursive=True))
-            expanded.extend(glob.glob(f"{root}/**/*{kw}*.CSV", recursive=True))
-        expanded.extend(glob.glob(f"{root}/**/*.csv", recursive=True))
-        expanded.extend(glob.glob(f"{root}/**/*.CSV", recursive=True))
-    unique = []
-    for path in expanded:
-        if path not in unique:
-            unique.append(path)
-    return sorted(unique)
-
-
-def _is_qualtrics_csv(path: str) -> bool:
-    """Heuristic check: Qualtrics exports have survey question columns like Q1_1, Q2, Q6.0."""
+    fig,axes=plt.subplots(3,len(frames),figsize=(5.5*len(frames),10),squeeze=False,layout='constrained')
     try:
-        df = pd.read_csv(path, nrows=3)
+        for r,(code,label) in enumerate(TEXT_QUESTIONS.items()):
+            for c,(df,name) in enumerate(zip(frames,names)):
+                ax=axes[r,c]
+                wc=WordCloud(width=800,height=500,background_color='white',stopwords=STOPWORDS.union({'nil','na','n/a','none','will','course','etc'}),collocations=False,max_words=60,random_state=42)
+                words=wc.process_text(' '.join(df[code].dropna().astype(str)))
+                if words:
+                    wc.generate_from_frequencies(words)
+                    color=COURSE_COLORS[name]
+                    wc.recolor(color_func=lambda *args, **kwargs: color)
+                    ax.imshow(wc,interpolation='bilinear'); ax.axis('off')
+                else: _empty(ax,'No usable words')
+                ax.set_title(f'{name}\n{label} ({code})',fontsize=10)
+        return fig
     except Exception:
-        return False
-    cols = {str(c) for c in df.columns}
-    return any(col in cols for col in ["Q1_1", "Q2", "Q6.0", "Q7.0", "Q8.0", "Q3.0_1", "Q4.0_1"]) or any(
-        col.startswith("Q") for col in cols
-    )
+        plt.close(fig)
+        raise
 
 
-def _resolve_input_files(autism_path: str | None, treaty_path: str | None) -> tuple[str, str]:
-    """Resolve input CSV paths, including automatic discovery when paths aren't supplied."""
-    if autism_path and treaty_path:
-        return autism_path, treaty_path
-
-    all_csvs = _find_csv_matches(["autism", "Autism", "autism affirming", "Autism Affirming", "treaty", "Treaty", "understanding treaty", "Understanding Treaty"])
-    qualtrics_candidates = [p for p in all_csvs if _is_qualtrics_csv(p)]
-
-    autism_candidates = [p for p in qualtrics_candidates if any(k.lower() in p.lower() for k in ["autism", "affirming"]) or "0AUTI" in p]
-    treaty_candidates = [p for p in qualtrics_candidates if any(k.lower() in p.lower() for k in ["treaty", "understanding"]) or "0UNDE" in p]
-
-    if not autism_path and autism_candidates:
-        autism_path = autism_candidates[0]
-    if not treaty_path and treaty_candidates:
-        treaty_path = treaty_candidates[0]
-
-    if not autism_path or not treaty_path:
-        raise FileNotFoundError(
-            "Could not find both Qualtrics CSV inputs. Please provide --autism and --treaty, "
-            "or place the exported Qualtrics CSV files in the project folder or in the Datasets folder."
-        )
-    return autism_path, treaty_path
+def plot_wordclouds(autism_df,treaty_df):
+    frames,_=_validate_frames(autism_df,treaty_df)
+    return _wordclouds(frames,COURSES)
 
 
-def _save_fig(fig: Figure, output_path: str) -> str:
-    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_path, dpi=200, bbox_inches="tight")
-    return output_path
-
-
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Qualtrics survey analysis for the Treaty Series MicroCert programs.")
-    parser.add_argument("--autism", type=str, default=None, help="Path to the Autism Affirming Practice CSV export.")
-    parser.add_argument("--treaty", type=str, default=None, help="Path to the Understanding Treaty CSV export.")
-    parser.add_argument("--output-dir", type=str, default="outputs", help="Directory to save charts and summaries.")
-    parser.add_argument("--show-plots", action="store_true", help="Open generated plots in a window after saving them.")
-    args = parser.parse_args(argv)
-
+def analyze_survey(autism_df, treaty_df, course=None, include_figures=True, include_wordclouds=False):
+    """Unified API. None = both courses; invalid course raises ValueError. Inputs untouched."""
+    frames,notices=_validate_frames(autism_df,treaty_df,course)
+    names=COURSES.copy() if course is None else [course]
+    long=pd.concat([_to_long(df) for df in frames],ignore_index=True)
+    long.attrs['courses']=names
+    long.attrs['selected_courses']=names
+    # Keep empty selected courses represented in summary and figures.
+    theme=get_theme_summary(long).reindex(names)
+    nps=_nps_table(list(zip(names,frames)))
+    texts=_texts(frames)
+    summary={'courses':names,'respondent_rows':dict(zip(names,[len(df) for df in frames])),
+             'valid_likert_responses':len(long),'valid_nps_responses':int(nps.n.sum())}
+    for name,df in zip(names,frames):
+        if df[list(STATEMENTS)].notna().sum().sum()==0: notices.append(f'{name}: 没有有效 Likert 回答。')
+        if df.Q2.notna().sum()==0: notices.append(f'{name}: 没有有效 NPS 回答。')
+    tables={'theme_summary':theme,'nps_summary':nps,'response_distribution':_response_table(long),
+            'theme_response_counts':long.groupby(['Course','Dimension']).size().reindex(pd.MultiIndex.from_product([names,DIMENSIONS],names=['Course','Dimension']),fill_value=0).rename('n').reset_index()}
+    figures={}
     try:
-        autism_input, treaty_input = _resolve_input_files(args.autism, args.treaty)
-    except FileNotFoundError as exc:
-        print(f"Input error: {exc}")
-        return 1
+        if include_figures:
+            figures={'theme_agreement':plot_theme_agreement(long),'response_distribution':plot_response_distribution(long),'nps_breakdown':_plot_nps(nps)}
+            if include_wordclouds:
+                try: figures['wordclouds']=_wordclouds(frames,names)
+                except ImportError: notices.append('未安装 wordcloud，已跳过词云；其他结果可用。')
+    except Exception:
+        for fig in figures.values(): plt.close(fig)
+        raise
+    return {'summary':summary,'tables':tables,'figures':figures,'notices':notices,'qualitative':texts,'long_data':long,
+            'metadata':{'course':course,'likert_scale':[1,5],'percentage_scale':[0,100],
+                        'limitations':['未自动筛选完成状态或去重。','主题均分以有效题目回答为单位，不是先按受访者平均。','未提供 term 筛选或 HTTP 服务。']}}
 
-    autism_df, treaty_df = load_survey_data(autism_input, treaty_input)
-    long_df = build_long_format(autism_df, treaty_df)
 
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+def _resolve_input_files(autism_path=None,treaty_path=None):
+    root=Path(__file__).resolve().parent
+    candidates=sorted((root/'Datasets').glob('*.csv'))
+    def find(words):
+        for p in candidates:
+            if not any(w.lower() in p.name.lower() for w in words): continue
+            if 'Q2' in pd.read_csv(p,nrows=0).columns: return str(p)
+        raise FileNotFoundError('请使用 --autism 和 --treaty 指定原始 Qualtrics CSV。')
+    return autism_path or find(['autism','0AUTI']),treaty_path or find(['treaty','0UNDE'])
 
-    theme_summary = get_theme_summary(long_df)
-    nps_summary = get_nps_summary(autism_df, treaty_df)
-    print("Theme summary:\n", theme_summary)
-    print("\nNPS summary:\n", nps_summary)
 
-    chart_paths = {
-        "theme_agreement": _save_fig(plot_theme_agreement(long_df), str(output_dir / "theme_agreement.png")),
-        "response_distribution": _save_fig(plot_response_distribution(long_df), str(output_dir / "response_distribution.png")),
-        "nps_breakdown": _save_fig(plot_nps_breakdown(autism_df, treaty_df), str(output_dir / "nps_breakdown.png")),
-    }
+def export_survey_result(result, output_dir, show_plots=False):
+    """Write one selected view; close all figures after export."""
+    import json
+    output=Path(output_dir)
+    output.mkdir(parents=True,exist_ok=True)
+    try:
+        for name,table in result['tables'].items(): table.to_csv(output/(name+'.csv'),index=name!='theme_response_counts')
+        for code,table in result['qualitative'].items(): table.to_csv(output/f'qualitative_{code}.csv',index=False)
+        for name,fig in result['figures'].items(): fig.savefig(output/(name+'.png'),dpi=180,bbox_inches='tight')
+        (output/'analysis_metadata.json').write_text(json.dumps({k:result[k] for k in ['summary','notices','metadata']},ensure_ascii=False,indent=2),encoding='utf-8')
+        if show_plots: plt.show()
+    finally:
+        for fig in result['figures'].values(): plt.close(fig)
+    return output
 
-    qualitative = get_qualitative_responses(autism_df, treaty_df)
-    for code, df in qualitative.items():
-        out_path = output_dir / f"qualitative_{code}.csv"
-        df.to_csv(out_path, index=False)
-        print(f"\nSaved qualitative responses for {code} to {out_path}")
 
-    wordcloud_fig = plot_wordclouds(autism_df, treaty_df)
-    chart_paths["wordclouds"] = _save_fig(wordcloud_fig, str(output_dir / "wordclouds.png"))
-
-    print("\nSaved charts:")
-    for name, path in chart_paths.items():
-        print(f"  - {name}: {path}")
-
-    if args.show_plots:
-        plt.show()
-
+def main(argv=None):
+    parser=argparse.ArgumentParser(description='Qualtrics backend analysis')
+    parser.add_argument('--autism'); parser.add_argument('--treaty')
+    parser.add_argument('--course',choices=[*COURSES,'overall'],default=None,
+                        help='Omit to export PBS, Treaty and overall; overall exports only the combined view.')
+    parser.add_argument('--output-dir',default=str(Path(__file__).resolve().parent/'outputs'/'qualtrics_analysis'))
+    parser.add_argument('--show-plots',action='store_true')
+    args=parser.parse_args(argv)
+    a,t=load_survey_data(*_resolve_input_files(args.autism,args.treaty))
+    scopes=[(COURSES[0],'pbs'),(COURSES[1],'treaty'),(None,'combined')]
+    if args.course is not None:
+        selected=None if args.course=='overall' else args.course
+        scopes=[(course,folder) for course,folder in scopes if course==selected]
+    for course,folder in scopes:
+        result=analyze_survey(a,t,course,include_wordclouds=True)
+        output=export_survey_result(result,Path(args.output_dir)/folder,args.show_plots)
+        print(f'Saved Qualtrics outputs: {output}')
     return 0
 
 
-if __name__ == "__main__":
+if __name__=='__main__':
     raise SystemExit(main())
