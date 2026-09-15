@@ -1,0 +1,14 @@
+{
+  "calendars": [
+    "PBS - Autism Afferming Practice Salesforce Enrolments Extract.xls",
+    "Understanding Treaty Salesforce Enrolments Extract.xls"
+  ],
+  "surveys": [
+    {"offering": "0AUTI0001_2025_MAR_PAR_1", "file": "0AUTI0001_2025_MAR_PAR_1 _ PBS_ Autism Affirming Practice_August 26, 2026_00.20.csv"},
+    {"offering": "0UNDE0001_2026_FEB_PAR_2", "file": "Understanding Treaty _ 0UNDE0001_2026_FEB_PAR_2_August 26, 2026_00.21.csv"}
+  ],
+  "support": [
+    {"course": "0AUTI0001", "file": "PBS - Autism Afferming Practice Salesforce Extract.xls"},
+    {"course": "0UNDE0001", "file": "Understanding Treaty Salesforce Extract.xls"}
+  ]
+}

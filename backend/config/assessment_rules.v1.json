@@ -1,0 +1,30 @@
+{
+  "version": "initial-v1",
+  "courses": [
+    {
+      "code": "0AUTI0001",
+      "name": "PBS: Autism Affirming Practice",
+      "rule": {
+        "status": "confirmed",
+        "enabled": true,
+        "pass_threshold": 70,
+        "components": [
+          {"key": "AT1", "weight": "0.40"},
+          {"key": "AT2", "weight": "0.60"}
+        ],
+        "evidence": "User-confirmed project requirement: AT1 40%, AT2 60%, weighted percentage >= 70 passes."
+      }
+    },
+    {
+      "code": "0UNDE0001",
+      "name": "Understanding Treaty",
+      "rule": {
+        "status": "candidate",
+        "enabled": false,
+        "pass_threshold": 70,
+        "components": [],
+        "evidence": "Unverified candidate only; no official Pass/Fail may be produced."
+      }
+    }
+  ]
+}

@@ -1,0 +1,36 @@
+services:
+  db:
+    image: mysql:8.0
+    profiles: ["deployment"]
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-mpe}
+      MYSQL_USER: ${MYSQL_USER:-mpe}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-}
+    ports:
+      - "127.0.0.1:3307:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+  api:
+    profiles: ["deployment"]
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      DATABASE_URL: mysql+pymysql://${MYSQL_USER}:${MYSQL_PASSWORD}@db:3306/${MYSQL_DATABASE}?charset=utf8mb4
+      RAW_DATA_ROOT: /raw-data
+      APP_ENV: development
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./datasets:/raw-data:ro
+    depends_on:
+      db:
+        condition: service_healthy
+volumes:
+  mysql_data:

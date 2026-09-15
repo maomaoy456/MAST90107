@@ -1,0 +1,53 @@
+{
+  "version": "confirmed-v2",
+  "courses": [
+    {
+      "code": "0AUTI0001",
+      "name": "PBS: Autism Affirming Practice",
+      "rule": {
+        "status": "confirmed",
+        "enabled": true,
+        "pass_threshold": 70,
+        "components": [
+          {
+            "key": "AT1",
+            "weight": "0.40"
+          },
+          {
+            "key": "AT2",
+            "weight": "0.60"
+          }
+        ],
+        "evidence": "User confirmed both courses: AT1 40%, AT2 60%, weighted grade >=70 passes; no final exam; badge independent."
+      },
+      "assignment_aliases": {
+        "Assessment Task 1 (AT1): Formulate a case for an Autistic person that is neurodiversity affirming.": "AT1",
+        "Assessment Task 2 (AT2): Proactive strategies for a comprehensive behaviour support plan": "AT2"
+      }
+    },
+    {
+      "code": "0UNDE0001",
+      "name": "Understanding Treaty",
+      "rule": {
+        "status": "confirmed",
+        "enabled": true,
+        "pass_threshold": 70,
+        "components": [
+          {
+            "key": "AT1",
+            "weight": "0.40"
+          },
+          {
+            "key": "AT2",
+            "weight": "0.60"
+          }
+        ],
+        "evidence": "User confirmed both courses: AT1 40%, AT2 60%, weighted grade >=70 passes; no final exam; badge independent."
+      },
+      "assignment_aliases": {
+        "Assessment 1: Why treaty?  (40%)": "AT1",
+        "Assessment 2: Making treaty today  (60%)": "AT2"
+      }
+    }
+  ]
+}
