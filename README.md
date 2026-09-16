@@ -149,7 +149,7 @@ The export is read-only: it does not modify the database or train models. Survey
 | Engagement | Resource categories; activity timelines and course phases; support activity, response time, channels, topics and representative cleaned issue summaries |
 | Assignments | Scored/self-assessment modes, submission and missing status, lateness, attempts, timing, scores, feedback and AT1 40% + AT2 60% weighted results |
 | Badge & Outcomes | Valid/revoked Badge evidence, completion, award timing, delay, independent academic outcomes, Survey summaries and cleaned anonymous comments |
-| Insights | Four target cards, five exploratory analysis areas, coverage, Spearman relationships, group comparisons and saved model evaluation |
+| Insights | Five question-led exploratory views with one relationship chart and one group comparison each; a separate Models tab shows saved model evaluation and internal retraining controls |
 | Data & Rules | Source quality, calendar information and versioned assessment rules |
 
 ## API summary
@@ -183,7 +183,8 @@ Common filters are `course`, `offering`, or comma-separated `offerings`. Engagem
 - Badge and academic pass are independent. Revoked-only evidence is unsuccessful; a separate valid award remains valid.
 - Badge offering membership comes from unique student-to-Engagement matching within the course, rather than award dates.
 - Survey responses and Salesforce cases are not joined to students. `Age (Hours)` is Salesforce response time.
-- Spearman correlation describes a ranked association, not causation. Intervals crossing zero are shown as directionally uncertain.
+- Insights pools compatible offerings within each course because the student sample is small. Its Exploration tab opens one of five questions at a time: engagement and grades, page categories, contact timing, self-assessment, or Badge relationships. Each view contains one necessary assessment selector, a short finding, a Spearman relationship chart, a group comparison, a compact coverage note and one folded supporting table.
+- Spearman correlation describes a ranked association, not causation. Intervals crossing zero are shown as directionally uncertain. The within-offering rank value remains available in the folded table as a secondary reference and is not mixed with the raw estimate in the chart.
 
 ## Verification
 

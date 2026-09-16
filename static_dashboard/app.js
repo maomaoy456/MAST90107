@@ -1,9 +1,9 @@
 "use strict";
 
-import { clearSpecialPage, renderSpecialPage } from "./page-visuals.js?v=20260916-5";
-import { renderInsightsPage } from "./insights-visuals.js?v=20260916-5";
+import { clearSpecialPage, renderSpecialPage } from "./page-visuals.js?v=20260916-7";
+import { renderInsightsPage } from "./insights-visuals.js?v=20260916-7";
 
-const state = { catalog: null, page: "overview", course: "", offering: "", assignments: new Set(), interval: "day", mode: "combined", target: "all", engagementAttribution: "activity_by_start_date", supportTopic: "all", outcomesTab: "badge", insightsTab: "exploration", insightArea: "engagement_grade", insightOutcome: "" };
+const state = { catalog: null, page: "overview", course: "", offering: "", assignments: new Set(), interval: "day", mode: "combined", engagementAttribution: "activity_by_start_date", supportTopic: "all", outcomesTab: "badge", insightsTab: "exploration", insightArea: "engagement_grade", explorationTarget: "AT1", modelTarget: "all" };
 const pageNames = {
   overview: "Overview", engagement: "Engagement", assignments: "Assignments",
   outcomes: "Badge & Outcomes", insights: "Insights", "data-rules": "Data & Rules"
@@ -17,6 +17,14 @@ const knownLabels = {
   valid_award_holders: "Valid Badge holders", cohort_memberships: "Cohort memberships",
   mean_score_pct: "Mean score (%)", submission_rate_pct: "Submission rate (%)",
 };
+const cohortLabels = {
+  source_specific: "Source-specific cohorts; student counts can differ between sources",
+  all_engagement: "All Engagement students in the selected offering scope",
+  all_assignment: "All Assignment students in the selected offering scope",
+  engagement_student_offering_memberships: "Engagement students in the selected offering scope",
+  course_separated_student_offering_records: "Linked student-offering records pooled across this course",
+  metadata_only: "Source and rule metadata for the selected scope"
+};
 const colours = ["#355b88", "#d97706", "#16856b", "#8b5cf6", "#dc4c64", "#64748b"];
 let pageRequest = 0;
 const staticSnapshot = window.__MPE_STATIC_SNAPSHOT__ || null;
@@ -28,6 +36,10 @@ const escapeHtml = value => String(value ?? "").replace(/[&<>'"]/g, character =>
 })[character]);
 const label = key => knownLabels[key] || String(key).replaceAll("_", " ").replace(/\b\w/g, character => character.toUpperCase());
 const shortLabel = value => String(value).length > 30 ? String(value).slice(0, 27) + "…" : String(value);
+const offeringLabel = value => {
+  const match = String(value || "").trim().match(/^(?:[A-Z0-9]+[ _-]+)?(\d{4})[ _-]+([A-Z]{3})[ _-]+PAR[ _-]+(\d+)$/i);
+  return match ? `${match[1]} ${match[2].toUpperCase()} PAR ${match[3]}` : String(value || "Unknown");
+};
 
 async function api(path, options = {}) {
   if (staticMode) {
@@ -87,7 +99,7 @@ function barChart(title, rows, valueKey) {
   const zero = x(0);
   const rowsSvg = items.map((row, index) => {
     const value = Number(row.metrics[valueKey].value), end = x(value), start = Math.min(zero, end), barWidth = Math.max(Math.abs(end - zero), 1);
-    return `<text x="${labelWidth-10}" y="${top+index*rowHeight+18}" text-anchor="end">${escapeHtml(shortLabel(row.label))}</text><rect x="${start}" y="${top+index*rowHeight+5}" width="${barWidth}" height="17" rx="2" fill="${value < 0 ? colours[4] : colours[0]}"/><text x="${value < 0 ? start-5 : end+5}" y="${top+index*rowHeight+18}" text-anchor="${value < 0 ? "end" : "start"}">${value.toLocaleString("en-AU", {maximumFractionDigits:2})}</text>`;
+    return `<text x="${labelWidth-10}" y="${top+index*rowHeight+18}" text-anchor="end">${escapeHtml(shortLabel(offeringLabel(row.label)))}</text><rect x="${start}" y="${top+index*rowHeight+5}" width="${barWidth}" height="17" rx="2" fill="${value < 0 ? colours[4] : colours[0]}"/><text x="${value < 0 ? start-5 : end+5}" y="${top+index*rowHeight+18}" text-anchor="${value < 0 ? "end" : "start"}">${value.toLocaleString("en-AU", {maximumFractionDigits:2})}</text>`;
   }).join("");
   return `<div class="chart"><div class="chart-title">${label(valueKey)}</div><svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(label(valueKey))} bar chart"><line x1="${zero}" y1="${top}" x2="${zero}" y2="${height-bottom}" class="axis"/>${rowsSvg}</svg>${rows.length > items.length ? `<p class="chart-note">Showing the first ${items.length} of ${rows.length} categories. Use the data table for all values.</p>` : ""}</div>`;
 }
@@ -109,8 +121,8 @@ function renderRows(title, rows, open = false) {
   const dimensions = [...new Set(rows.flatMap(row => Object.keys(row.dimensions || {})))];
   const metrics = [...new Set(rows.flatMap(row => Object.keys(row.metrics || {})))];
   const headings = ["Item", ...dimensions.map(label), ...metrics.map(label)];
-  const body = rows.map(row => `<tr><td>${escapeHtml(row.label)}</td>${dimensions.map(key =>
-    `<td>${escapeHtml(row.dimensions?.[key] ?? "—")}</td>`).join("")}${metrics.map(key =>
+  const body = rows.map(row => `<tr><td>${escapeHtml(offeringLabel(row.label))}</td>${dimensions.map(key =>
+    `<td>${escapeHtml(key === "offering" ? offeringLabel(row.dimensions?.[key]) : row.dimensions?.[key] ?? "—")}</td>`).join("")}${metrics.map(key =>
     `<td>${metricValue(row.metrics?.[key])}</td>`).join("")}</tr>`).join("");
   return `<section class="visual"><h3>${label(title)}</h3>${renderChart(title, rows)}<details ${open ? "open" : ""}><summary>View data (${rows.length} rows)</summary><div class="table-wrap"><table><thead><tr>${headings.map(heading =>
     `<th>${heading}</th>`).join("")}</tr></thead><tbody>${body}</tbody></table></div></details></section>`;
@@ -147,11 +159,11 @@ function bindPageFilters() {
 
 async function retrain(event) {
   const button = event?.currentTarget;
-  if (!button || state.target === "all") return;
+  if (!button || state.modelTarget === "all") return;
   const originalText = button.textContent;
   button.disabled = true; button.textContent = "Training…";
   try {
-    const result = await api("/v1/models/train", { method: "POST", body: JSON.stringify({ course: state.course, target: state.target }) });
+    const result = await api("/v1/models/train", { method: "POST", body: JSON.stringify({ course: state.course, target: state.modelTarget }) });
     showMessage(result.already_current ? "Data and configuration are unchanged. The current model remains active." : `Training finished with status: ${result.status}.`);
     await loadPage();
   } catch (error) { showMessage(error.message); }
@@ -175,7 +187,7 @@ async function loadAssignmentOptions() {
   const options = staticAssignmentGroups(await api(`/v1/assignment-options?${currentParams({ mode: state.mode })}`));
   const valid = new Set(options.map(item => item.ref));
   state.assignments = new Set([...state.assignments].filter(ref => valid.has(ref)));
-  picker.innerHTML = options.length ? options.map(item => `<label><input type="checkbox" value="${escapeHtml(item.ref)}" ${state.assignments.has(item.ref) ? "checked" : ""}><span>${escapeHtml(item.name)} · ${escapeHtml(item.offering)}</span></label>`).join("") : `<span class="unavailable">No assignments available</span>`;
+  picker.innerHTML = options.length ? options.map(item => `<label><input type="checkbox" value="${escapeHtml(item.ref)}" ${state.assignments.has(item.ref) ? "checked" : ""}><span>${escapeHtml(item.name)} · ${escapeHtml(item.offering === "All offerings" ? item.offering : offeringLabel(item.offering))}</span></label>`).join("") : `<span class="unavailable">No assignments available</span>`;
   picker.querySelectorAll("input").forEach(input => input.onchange = () => {
     if (staticMode) state.assignments.clear();
     input.checked ? state.assignments.add(input.value) : state.assignments.delete(input.value);
@@ -204,13 +216,13 @@ async function loadPage() {
     if (requestId !== pageRequest) return;
     if (state.assignments.size) extra.assignments = [...state.assignments].join(",");
   }
-  if (state.page === "insights") extra.target = state.target;
+  if (state.page === "insights") extra.target = state.explorationTarget;
   try {
     const data = await api(`/v1/${state.page}?${currentParams(extra)}`);
     if (requestId !== pageRequest) return;
     const models = state.page === "insights" ? await api(`/v1/models?${new URLSearchParams({course: state.course})}`) : null;
     if (requestId !== pageRequest) return;
-    el("cohort").textContent = `Analysis scope: ${label(data.cohort)}`;
+    el("cohort").textContent = `Analysis scope: ${cohortLabels[data.cohort] || label(data.cohort)}`;
     clearSpecialPage(el);
     el("modelPanel").innerHTML = "";
     if (state.page === "insights") {
@@ -233,16 +245,17 @@ async function renderRules() {
   const rules = await api(`/v1/rules?${currentParams()}`);
   const rows = rules.rules.map(rule => ({
     label: rule.version,
-    dimensions: { course: rule.course, offering: rule.offering || "Course default", status: rule.status, enabled: String(rule.enabled), pass_threshold: String(rule.pass_threshold) },
+    dimensions: { course: rule.course, offering: rule.offering ? offeringLabel(rule.offering) : "Course default", status: rule.status, enabled: String(rule.enabled), pass_threshold: String(rule.pass_threshold) },
     metrics: {}
   }));
   el("tables").insertAdjacentHTML("afterbegin", renderRows("Assessment rules", rows, true));
 }
 
 function populateOfferings() {
-  const options = state.catalog.offerings.filter(item => item.course === state.course);
+  const options = state.catalog.offerings.filter(item => item.course === state.course)
+    .sort((a, b) => String(a.starts_on || "").localeCompare(String(b.starts_on || "")) || a.code.localeCompare(b.code));
   el("offering").innerHTML = `<option value="">All offerings</option>${options.map(item =>
-    `<option value="${escapeHtml(item.code)}">${escapeHtml(item.cohort_label || item.code)} · ${escapeHtml(item.starts_on || "Date unknown")}</option>`).join("")}`;
+    `<option value="${escapeHtml(item.code)}">${escapeHtml(offeringLabel(item.code))} · ${escapeHtml(item.starts_on || "Date unknown")}</option>`).join("")}`;
   if (!options.some(item => item.code === state.offering)) state.offering = "";
   el("offering").value = state.offering;
 }

@@ -23,17 +23,21 @@ const shown = (metric, digits = 1, suffix = "") => {
     ? `${metric.value.toLocaleString("en-AU", { maximumFractionDigits: digits })}${suffix}` : esc(metric.value);
 };
 const shortOffering = code => {
-  const match = String(code || "").match(/_(\d{4})_([A-Z]{3})_(PAR_\d+)$/);
-  return match ? `${human(match[2]).slice(0, 3)} ${match[1]} · ${match[3].replace("_", " ")}` : String(code || "Unknown");
+  const match = String(code || "").trim().match(/^(?:[A-Z0-9]+[ _-]+)?(\d{4})[ _-]+([A-Z]{3})[ _-]+PAR[ _-]+(\d+)$/i);
+  return match ? `${match[1]} ${match[2].toUpperCase()} PAR ${match[3]}` : String(code || "Unknown");
 };
-const rowLabel = row => row.dimensions?.offering ? shortOffering(row.dimensions.offering) : human(row.label || row.key);
+const rowLabel = row => {
+  const raw = row.dimensions?.offering || row.label || row.key;
+  const compact = shortOffering(raw);
+  return compact !== String(raw || "Unknown") ? compact : human(raw);
+};
 
 function details(rows, title = "View data") {
   if (!rows?.length) return "";
   const dimensions = [...new Set(rows.flatMap(row => Object.keys(row.dimensions || {})))];
   const metrics = [...new Set(rows.flatMap(row => Object.keys(row.metrics || {})))];
   return `<details><summary>${esc(title)} (${rows.length} rows)</summary><div class="table-wrap"><table><thead><tr><th>Item</th>${dimensions.map(key => `<th>${esc(human(key))}</th>`).join("")}${metrics.map(key => `<th>${esc(human(key))}</th>`).join("")}</tr></thead><tbody>${rows.map(row =>
-    `<tr><td>${esc(row.label)}</td>${dimensions.map(key => `<td>${esc(row.dimensions?.[key] ?? "—")}</td>`).join("")}${metrics.map(key => `<td>${shown(row.metrics?.[key], 2)}</td>`).join("")}</tr>`).join("")}</tbody></table></div></details>`;
+    `<tr><td>${esc(shortOffering(row.label))}</td>${dimensions.map(key => `<td>${esc(key === "offering" ? shortOffering(row.dimensions?.[key]) : row.dimensions?.[key] ?? "—")}</td>`).join("")}${metrics.map(key => `<td>${shown(row.metrics?.[key], 2)}</td>`).join("")}</tr>`).join("")}</tbody></table></div></details>`;
 }
 
 function panel(title, subtitle, body, rows = [], wide = false) {
@@ -58,7 +62,7 @@ function groupedColumns(rows, metrics, labeler = rowLabel) {
   const max = Math.max(...values, 1);
   return `<div class="column-chart"><div class="column-groups">${rows.map(row => `<div class="column-group"><div class="columns">${metrics.map((key, index) => {
     const value = number(row, key);
-    return `<i style="height:${value == null ? 0 : Math.max(value / max * 100, value ? 3 : 0)}%;background:${COLORS[index]}" title="${esc(human(key))}: ${value ?? "Not available"}"></i>`;
+    return `<span class="column"><b>${value == null ? "NA" : value.toLocaleString("en-AU", {maximumFractionDigits:2})}</b><i style="height:${value == null ? 0 : Math.max(value / max * 100, value ? 3 : 0)}%;background:${COLORS[index]}" title="${esc(human(key))}: ${value ?? "Not available"}"></i></span>`;
   }).join("")}</div><span>${esc(labeler(row))}</span></div>`).join("")}</div><div class="legend">${metrics.map((key, index) => `<span><i style="background:${COLORS[index]}"></i>${esc(human(key))}</span>`).join("")}</div></div>`;
 }
 
@@ -129,7 +133,7 @@ function calendar(rows) {
   const parsed = rows.map(row => ({ row, start: Date.parse(row.dimensions?.starts_on), end: Date.parse(row.dimensions?.ends_on) })).filter(item => Number.isFinite(item.start) && Number.isFinite(item.end));
   if (!parsed.length) return "";
   const min = Math.min(...parsed.map(item => item.start)), max = Math.max(...parsed.map(item => item.end)), span = Math.max(max - min, 1);
-  return `<div class="calendar-list">${parsed.sort((a, b) => a.start-b.start).map(({row,start,end}) => `<div><span>${esc(shortOffering(row.dimensions.offering))}</span><div><i style="left:${(start-min)/span*100}%;width:${Math.max((end-start)/span*100,2)}%"></i></div><b>${esc(human(row.dimensions.phase))}</b></div>`).join("")}</div>`;
+  return `<div class="calendar-list">${parsed.sort((a, b) => a.start-b.start).map(({row,start,end}) => `<div><span>${esc(shortOffering(row.dimensions.offering))}</span><div><i style="left:${(start-min)/span*100}%;width:${Math.max((end-start)/span*100,2)}%"></i></div><b>${esc(row.dimensions.starts_on)} – ${esc(row.dimensions.ends_on)}<small>${esc(human(row.dimensions.phase))}</small></b></div>`).join("")}</div>`;
 }
 
 function gauges(rows) {
@@ -181,7 +185,7 @@ function renderOverview(data, ctx) {
   const supportRows = t.support_channels || [];
   ctx.tables.innerHTML = [
     panel("Offering comparison","Assignment and Engagement students use separate source cohorts",groupedColumns(t.offering_comparison || [],["assignment_students","engagement_students"]),t.offering_comparison || [],true),
-    panel("Course calendar","Teaching windows on a shared scale",calendar(t.course_calendar || []),t.course_calendar || [],true),
+    panel("Course calendar","Each bar shows the confirmed course start-to-end teaching window. The date range and current phase appear on the right.",calendar(t.course_calendar || []),t.course_calendar || [],true),
     academic(t),
     panel("Learner feedback","Theme agreement and recommendation NPS",feedback,[...(t.survey_themes||[]),...(t.survey_nps||[])],true),
     panel("Support operations","Channel share and response time",`${metricCards([["Case records",(t.support_summary||[])[0]?.metrics?.records],["Median response hours",(t.support_summary||[])[0]?.metrics?.median_response_hours]])}${bars(supportRows,"records",row=>human(row.dimensions?.group||row.label))}`,supportRows,true)
@@ -217,7 +221,7 @@ function renderEngagement(data, ctx) {
     panel("Support topics over time","Darker cells represent more matched case records",heatmap(t.support_topics_timeline||[],"course","group","records",{parseRow:row=>String(row.dimensions?.group||"").split(":").slice(1).join(":"),parseColumn:row=>String(row.dimensions?.group||"").split(":")[0]}),t.support_topics_timeline||[],true),
     panel("Support records by weekday","Monday is 0 and Sunday is 6",bars([...(t.support_weekdays||[])].sort((a,b)=>Number(a.dimensions?.group)-Number(b.dimensions?.group)),"records",row=>["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"][Number(row.dimensions?.group)]||row.label),t.support_weekdays||[]),
     panel("Representative support issues","Frequent redacted issue subjects grouped by topic",issueButtons,issues,true),
-    panel("Course calendar","Teaching windows for the selected scope",calendar(t.course_calendar||[]),t.course_calendar||[],true)
+    panel("Course calendar","Each bar shows the confirmed course start-to-end teaching window for the selected offering scope.",calendar(t.course_calendar||[]),t.course_calendar||[],true)
   ].join("");
   ctx.notes.innerHTML=notes(data);
   document.querySelectorAll("#activitySwitch button").forEach(button=>button.onclick=()=>{ctx.state.engagementAttribution=button.dataset.value;renderEngagement(data,ctx);});
@@ -243,7 +247,7 @@ function renderAssignments(data,ctx){
     const deadline=select("assignment_deadline_coverage");
     const academicRows=(t.academic_results||[]).filter(row=>row.dimensions?.offering===offering);
     const weightedRows=(t.weighted_grade_distribution||[]).filter(row=>row.dimensions?.offering===offering);
-    sections.push(`<section class="page-section"><header><h3>${esc(shortOffering(offering))}</h3><p>${esc(offering)}</p></header>
+    sections.push(`<section class="page-section"><header><h3>${esc(shortOffering(offering))}</h3><p>Assignment activity for this teaching period.</p></header>
       <div class="viz-grid">${panel("Completion and submission status","Submission, missing and late values remain independent",stacked(statusItems),select("submission_status"),true)}
       ${panel("Missing flag","Source missing marker",assignmentBars(select("missing_flag")),select("missing_flag"))}${panel("Late flag","Source late marker",assignmentBars(select("late_flag")),select("late_flag"))}
       ${panel("Attempt distribution","Null attempts remain unknown",assignmentBars(select("attempt_distribution")),select("attempt_distribution"),true)}
@@ -274,11 +278,12 @@ function renderOutcomes(data,ctx){
   const badgeItems=[{label:"Selected cohort",segments:(t.badge_status||[]).map(row=>({label:row.key,value:number(row,"memberships"),color:CATEGORY_COLORS[row.key]}))}];
   const panels={
     badge:[panel("Badge status of the cohort","Valid, revoked-only, review and unmatched states",stacked(badgeItems),t.badge_status||[],true),panel("Badge outcomes by offering","Cohort size and valid Badge holders",groupedColumns(t.offering_comparison||[],["cohort_students","valid_award_holders"]),t.offering_comparison||[],true),panel("Badge completion rate","Valid matched non-revoked holders divided by Engagement cohort",bars(t.offering_comparison||[],"badge_completion_rate_pct"),t.offering_comparison||[]),panel("Award timeline","Badge memberships by status",lineChart(t.award_timeline||[],"memberships",{seriesKey:"status"}),t.award_timeline||[],true),panel("Delay from course end","Badge holders by delay band",bars(t.badge_delay_from_course_end||[],"holders",row=>`${shortOffering(row.dimensions?.offering)} · ${human(row.dimensions?.band)}`),t.badge_delay_from_course_end||[],true)].join(""),
-    academic:academic(t)+panel("Course calendar","Teaching windows and current phase",calendar(t.course_calendar||[]),t.course_calendar||[],true),
+    academic:academic(t)+panel("Course calendar","Each bar shows the confirmed course start-to-end teaching window. The date range and current phase appear on the right.",calendar(t.course_calendar||[]),t.course_calendar||[],true),
     survey:[panel("Survey coverage","Survey data is explicitly mapped by offering",coverageTable(data.coverage),[],true),panel("Would they recommend it?","NPS composition",nps((t.survey_nps||[])[0]),t.survey_nps||[]),panel("Survey theme scores","Average agreement on a fixed 0–5 scale",gauges(t.survey_themes||[]),t.survey_themes||[],true),panel("Question response distribution","Diverging Likert-style distribution",likert(t.survey_questions||[],t.survey_distribution||[]),[...(t.survey_questions||[]),...(t.survey_distribution||[])],true),panel("Feedback topics","Keyword categories can overlap",bars(t.survey_feedback_topics||[],"responses",row=>`${human(row.dimensions?.question_group)} · ${human(row.label)}`),t.survey_feedback_topics||[],true),panel("Anonymous feedback comments","Direct identifiers are removed before display",comments(t.survey_feedback_comments||[]),t.survey_feedback_comments||[],true)].join(""),
     diagnostics:[panel("Award diagnostics","Reasons records could or could not be matched",bars(t.award_diagnostics||[],"records",row=>human(row.label)),t.award_diagnostics||[],true),coverageMatrix(data.coverage),panel("Source snapshots","Latest completed source snapshots",`<div class="snapshot-list">${Object.entries(data.snapshots||{}).map(([key,value])=>`<div><span>${esc(human(key))}</span><b>${esc(value)}</b></div>`).join("")}</div>`,[],true),notes(data)].join("")
   };
-  ctx.tables.innerHTML=`<div class="outcome-tabs" id="outcomeTabs">${[["badge","Badge"],["academic","Academic results"],["survey","Survey"],["diagnostics","Diagnostics"]].map(([key,label])=>`<button data-tab="${key}" class="${tab===key?"active":""}">${label}</button>`).join("")}</div><div class="viz-grid">${panels[tab]}</div>`;
+  const offering=data.filters?.offering, scope=offering ? `Showing offering ${shortOffering(offering)}.` : "Showing all offerings combined; use the Offering selector to view one teaching period.";
+  ctx.tables.innerHTML=`<div class="scope-note"><b>Badge analysis scope</b><span>${esc(scope)}</span></div><div class="outcome-tabs" id="outcomeTabs">${[["badge","Badge"],["academic","Academic results"],["survey","Survey"],["diagnostics","Diagnostics"]].map(([key,label])=>`<button data-tab="${key}" class="${tab===key?"active":""}">${label}</button>`).join("")}</div><div class="viz-grid">${panels[tab]}</div>`;
   ctx.notes.innerHTML="";
   document.querySelectorAll("#outcomeTabs button").forEach(button=>button.onclick=()=>{ctx.state.outcomesTab=button.dataset.tab;renderOutcomes(data,ctx);});
 }

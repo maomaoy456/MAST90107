@@ -145,8 +145,8 @@ def write_site(snapshot: dict, output: Path) -> None:
         shutil.rmtree(temporary)
     temporary.mkdir()
     index = (FRONTEND / "index.html").read_text(encoding="utf-8")
-    index = index.replace('<script type="module" src="app.js?v=20260916-5"></script>',
-        '<script src="snapshot.js"></script>\n  <script type="module" src="app.js?v=20260916-5"></script>')
+    index = re.sub(r'(<script type="module" src="app\.js\?[^\"]+"></script>)',
+        r'<script src="snapshot.js"></script>\n  \1', index)
     (temporary / "index.html").write_text(index, encoding="utf-8")
     (temporary / "snapshot.js").write_text(javascript_assignment(snapshot), encoding="utf-8")
     for name in ASSETS:
