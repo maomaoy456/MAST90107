@@ -1,9 +1,9 @@
 "use strict";
 
-import { clearSpecialPage, renderSpecialPage } from "./page-visuals.js?v=20260916-7";
-import { renderInsightsPage } from "./insights-visuals.js?v=20260916-7";
+import { clearSpecialPage, renderSpecialPage } from "./page-visuals.js?v=20260917-1";
+import { renderInsightsPage } from "./insights-visuals.js?v=20260917-1";
 
-const state = { catalog: null, page: "overview", course: "", offering: "", assignments: new Set(), interval: "day", mode: "combined", engagementAttribution: "activity_by_start_date", supportTopic: "all", outcomesTab: "badge", insightsTab: "exploration", insightArea: "engagement_grade", explorationTarget: "AT1", modelTarget: "all" };
+const state = { catalog: null, page: "overview", course: "", offering: "", assignments: new Set(), interval: "day", mode: "combined", supportTopic: "all", outcomesTab: "badge", insightsTab: "exploration", insightArea: "engagement_grade", explorationTarget: "AT1", modelTarget: "all" };
 const pageNames = {
   overview: "Overview", engagement: "Engagement", assignments: "Assignments",
   outcomes: "Badge & Outcomes", insights: "Insights", "data-rules": "Data & Rules"
@@ -128,13 +128,6 @@ function renderRows(title, rows, open = false) {
     `<th>${heading}</th>`).join("")}</tr></thead><tbody>${body}</tbody></table></div></details></section>`;
 }
 
-function renderCoverage(coverage) {
-  const rows = Object.entries(coverage || {}).map(([offering, sources]) => ({
-    label: offering, dimensions: {}, metrics: Object.fromEntries(Object.entries(sources).map(([key, value]) =>
-      [key, { value: value ? "Available" : "No data" }]))
-  }));
-  el("coverage").innerHTML = rows.length ? `<div class="panel"><h3>Data coverage</h3>${renderRows("Offering sources", rows, true)}</div>` : "";
-}
 
 function renderTables(data) {
   return Object.entries(data.tables || {}).map(([key, rows], index) => renderRows(key, rows, index === 0)).join("");
@@ -229,7 +222,7 @@ async function loadPage() {
       renderInsightsPage(data, models, {state, metrics:el("metrics"), coverage:el("coverage"), tables:el("tables"), notes:el("notes"), reload:loadPage, retrain, staticMode});
     } else if (!renderSpecialPage(data, { state, el })) {
       renderMetrics(data.metrics);
-      renderCoverage(data.coverage);
+      el("coverage").innerHTML = "";
       el("tables").innerHTML = renderTables(data);
       el("notes").innerHTML = data.notes?.length ? `<div class="panel notes"><h3>Definitions and limitations</h3><ul>${data.notes.map(note => `<li>${escapeHtml(note)}</li>`).join("")}</ul></div>` : "";
     }

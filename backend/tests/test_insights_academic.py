@@ -79,6 +79,20 @@ def test_incomplete_component_not_renormalized_and_selection_does_not_change_fin
     assert all(not value['suppressed'] for value in metrics.values())
 
 
+def test_displayed_weighted_rule_uses_effective_configuration(dashboard):
+    client, session, offering = dashboard
+    confirmed(session, offering)
+    rule = Snapshot(session).rule(offering)
+    for first, second, threshold in ((.4, .6, 70), (.2, .8, 75), (.5, .5, 60)):
+        rule.components = [{'key': 'AT1', 'weight': first}, {'key': 'AT2', 'weight': second}]
+        rule.pass_threshold = threshold
+        session.commit()
+        row = client.get('/api/v1/assignments', headers=HEADERS).json()['tables']['academic_results'][0]
+        assert row['dimensions']['calculation_rule'] == f'AT1 {first * 100:g}% + AT2 {second * 100:g}%'
+        assert float(row['dimensions']['pass_threshold_pct']) == threshold
+        assert row['metrics']['observed_memberships']['value'] == 20
+
+
 def test_ambiguous_component_is_not_silently_chosen(dashboard):
     _, session, offering = dashboard
     confirmed(session, offering)

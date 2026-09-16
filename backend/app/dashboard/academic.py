@@ -64,6 +64,9 @@ def add_academic(page, data, scope):
         rule = data.rule(offering)
         dims = {"offering": offering.offering_code or "unlabelled", "unit": "student_offering_memberships",
             "scope": "whole_offering_ignores_assignment_selection", "rule_version": rule.version if rule else "unavailable"}
+        if rule:
+            dims["calculation_rule"] = " + ".join(f"{c['key']} {float(c['weight']) * 100:g}%" for c in rule.components)
+            dims["pass_threshold_pct"] = str(rule.pass_threshold)
         values = [float(r['final']) for r in selected.values() if r['final'] is not None]
         page.tables.setdefault("academic_results", []).append(TableRow(key=dims['offering'], label="Weighted course grade", dimensions=dims, metrics={
             "observed_memberships": metric(len(members), members, gate),

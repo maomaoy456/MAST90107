@@ -145,12 +145,22 @@ The export is read-only: it does not modify the database or train models. Survey
 
 | Page | Main content |
 | --- | --- |
-| Overview | Cohort and source coverage, offering comparison, academic results, weighted grade bands, Survey themes/NPS and Salesforce summaries |
+| Overview | Cohort and source coverage, offering comparison, course start/end date table, academic results, weighted grade bands, Survey themes/NPS and Salesforce summaries |
 | Engagement | Resource categories; activity timelines and course phases; support activity, response time, channels, topics and representative cleaned issue summaries |
-| Assignments | Scored/self-assessment modes, submission and missing status, lateness, attempts, timing, scores, feedback and AT1 40% + AT2 60% weighted results |
+| Assignments | Scored/self-assessment modes; per-assignment deadline badges, submission states, late flags, attempts, timing, scores and weighted results with explicit grade coverage |
 | Badge & Outcomes | Valid/revoked Badge evidence, completion, award timing, delay, independent academic outcomes, Survey summaries and cleaned anonymous comments |
 | Insights | Five question-led exploratory views with one relationship chart and one group comparison each; a separate Models tab shows saved model evaluation and internal retraining controls |
-| Data & Rules | Source quality, calendar information and versioned assessment rules |
+| Data & Rules | Source quality and versioned assessment rules |
+
+Data coverage and the course-date table appear only on Overview. Survey assessment feedback is shown with the other questionnaire results in Badge & Outcomes → Survey, rather than repeated on Assignments.
+
+Assignment charts group readable time/score bands beneath each assessment name. The standalone Missing flag, Deadline coverage and Late duration charts are removed; raw missing flags and deadline states remain in folded data and the API. A false source late flag is labelled **Not marked late**, since an unsubmitted record is not necessarily an on-time submission. Deadline not provided is unknown, not confirmation that no deadline applies.
+
+Cumulative submission uses a fixed 0–100% vertical scale and a proportional horizontal days-to-deadline scale (0 = deadline). Its denominator includes all records whose deadline has passed, including non-submitters; incomplete follow-up points remain unavailable. Timing summaries give final-24h percentages, median days before/after the deadline, and submission-to-grading days with their valid timestamp count. Relative days use source deadlines, not course end; large offsets must be checked against the source deadline before interpretation. Assignments without a passed, known deadline do not show empty deadline-based charts.
+
+Weighted summaries show complete-grade coverage, unknown-grade coverage, passed / complete grades and mean among complete grades. They display the effective rule and pass threshold from the API and retain the whole-offering denominator when one assignment is selected. Red grade bands indicate below 70; grey indicates unknown.
+
+Survey valid-response counts are not interchangeable: a theme requires at least half its items answered in a completed questionnaire; each individual question counts its own valid answers. This is why a theme can have 10 valid responses while its item counts range from 9 to 11. No anonymous Survey-to-student or Survey-to-assignment-score join is implied.
 
 ## API summary
 
@@ -174,10 +184,12 @@ Protected routes use `/api/v1` and require `X-API-Key`.
 
 Common filters are `course`, `offering`, or comma-separated `offerings`. Engagement and Outcomes accept `interval=day|week|month`. Assignments accepts `mode=combined|scored|self_assessment` and references returned by `/assignment-options`. Insights accepts `target=all|AT1|AT2|weighted_final|badge` and always pools compatible offerings within the selected course.
 
+Assignment deadline/timing rows include readable `assignment_name` and confirmed `assessment_key` alongside the stable `assignment_ref`. Academic result rows expose the effective `calculation_rule` and `pass_threshold_pct`; frontends should use these rather than hard-code offering overrides. The Assignment API retains missing flags, late duration and assessment-only Survey aggregates for compatibility, although their standalone/repeated frontend panels are removed.
+
 ## Core interpretation rules
 
 - Explicit `Z` or offset timestamps are stored as UTC instants. Naive timestamps use `Australia/Melbourne`; calendar views use Melbourne dates.
-- Engagement `start_date` means the first view of a resource, not course commencement. First-view and midpoint timelines are alternate estimates and must not be added.
+- Engagement `start_date` means the first view of a resource, not course commencement. Only first-view attribution is used: the full resource-summary count is placed on that date. It is not a daily click log; the midpoint output has been removed.
 - Both courses have AT1 at 40% and AT2 at 60%, no final exam and a pass threshold of 70. Both valid component grades are required; missing work stays unknown.
 - Missing attempts stay null. Submission status, `missing`, `late` and `excused` remain independent. Zero-point self-assessments remain non-scored activities.
 - Badge and academic pass are independent. Revoked-only evidence is unsuccessful; a separate valid award remains valid.

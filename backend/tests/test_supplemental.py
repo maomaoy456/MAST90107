@@ -189,6 +189,8 @@ def test_assignment_cumulative_curve_keeps_non_submitters(dashboard):
     curve = [r for r in page['tables']['assignment_cumulative_submission'] if r['dimensions']['days_relative_to_deadline'] == '0']
     assert all(r['metrics']['submitted_pct']['value'] == 50 for r in curve)
     assert page['tables']['assignment_time_summary'][0]['metrics']['median_grading_days']['value'] == 2
+    for name in ('assignment_deadline_coverage', 'assignment_submission_timing', 'assignment_time_summary'):
+        assert {r['dimensions']['assignment_name'] for r in page['tables'][name]} == {'AT1', 'AT2'}
     pairs = {r['key']: r['metrics']['students']['value'] for r in page['tables']['assignment_pair_submission']}
     assert pairs == {'both_submitted': 10, 'first_only': 0, 'second_only': 0, 'neither_submitted': 10}
 

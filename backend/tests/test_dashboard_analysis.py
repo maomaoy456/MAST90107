@@ -6,23 +6,22 @@ from app.models import (Assignment, AssignmentSubmission, BadgeAward, BadgeClass
     BadgeClassCourseMapping, Course, CourseOffering, EngagementEvent, ImportBatch, Student)
 
 
-def test_start_and_midpoint_activity_totals_and_local_date(dashboard):
+def test_first_view_activity_totals_and_local_date(dashboard):
     client, session, _ = dashboard
     for row in session.scalars(select(EngagementEvent)):
         row.first_viewed_on = date(2025, 3, 1)
-        # UTC 12:00-16:00 -> Melbourne 23:00-03:00, midpoint on March 2.
+        # A resource spanning two dates is still attributed to its first view.
         row.first_viewed_at = datetime(2025, 3, 1, 12)
         row.last_viewed_at = datetime(2025, 3, 1, 16)
     session.commit()
     page = client.get('/api/v1/engagement', headers=HEADERS).json()
     start = page['tables']['activity_by_start_date'][0]
-    midpoint = page['tables']['activity_by_midpoint'][0]
+    assert 'activity_by_midpoint' not in page['tables']
     assert start['dimensions']['period'] == '2025-03-01'
-    assert midpoint['dimensions']['period'] == '2025-03-02'
-    assert start['metrics']['views']['value'] == midpoint['metrics']['views']['value'] == 1200
+    assert start['metrics']['views']['value'] == 1200
     assert start['metrics']['participations']['value'] == 20
     month = client.get('/api/v1/engagement?interval=month', headers=HEADERS).json()
-    assert month['tables']['activity_by_midpoint'][0]['dimensions']['period'] == '2025-03'
+    assert month['tables']['activity_by_start_date'][0]['dimensions']['period'] == '2025-03'
 
 
 def test_unknown_view_dates_and_small_temporal_groups_are_visible(dashboard):
@@ -34,7 +33,7 @@ def test_unknown_view_dates_and_small_temporal_groups_are_visible(dashboard):
         page = client.get('/api/v1/engagement', params={'interval': interval}, headers=HEADERS).json()
         assert page['metrics']['views']['value'] == 1200
         assert all(not r['metrics']['views']['suppressed'] for r in page['tables']['activity_by_start_date'])
-        assert page['tables']['activity_by_midpoint'][0]['dimensions']['period'] == 'unknown'
+        assert any(r['dimensions']['period'] == 'unknown' for r in page['tables']['activity_by_start_date'])
 
 
 def test_assignment_selection_preserves_names_null_attempts_and_lateness(dashboard):

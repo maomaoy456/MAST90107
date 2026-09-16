@@ -18,7 +18,7 @@ def deadline(row):
 
 
 def add_assignment_time(page, data, scope):
-    from app.dashboard.assignments import selected_submissions
+    from app.dashboard.assignments import selected_submissions, assignment_name
     cutoff = datetime.now(timezone.utc).replace(tzinfo=None)
     rows = selected_submissions(data, scope, page.filters.mode)
     refs = set(page.filters.assignments.split(",")) if page.filters.assignments else None
@@ -29,7 +29,10 @@ def add_assignment_time(page, data, scope):
     for assignment_id, group in indexed.items():
         assignment = data.assignments[assignment_id]
         code = data.offerings[assignment.offering_id].offering_code
-        dims = {"offering": code, "assignment_ref": assignment.source_key, "as_of_utc": cutoff.isoformat() + "Z"}
+        dims = {"offering": code, "assignment_ref": assignment.source_key,
+                "assignment_name": assignment_name(assignment),
+                "assessment_key": assignment.assessment_key if assignment.mapping_status == "confirmed" else "unconfirmed",
+                "as_of_utc": cutoff.isoformat() + "Z"}
         key = code + ":" + assignment.source_key
         members = {r.student_id for r in group}
         eligible = [r for r in group if deadline(r) is not None and deadline(r) <= cutoff]
@@ -57,7 +60,7 @@ def add_assignment_time(page, data, scope):
             bins[band].add(row.student_id)
         timing_gate = group_guard(list(bins.values()), due, gate)
         final = {s for s, value in delays.items() if -1 <= value <= 0}
-        page.tables.setdefault("assignment_time_summary", []).append(TableRow(key=key, label=assignment.source_key, dimensions=dims, metrics={
+        page.tables.setdefault("assignment_time_summary", []).append(TableRow(key=key, label=assignment_name(assignment), dimensions=dims, metrics={
             "eligible_students": metric(len(due), due, gate),
             "final_24h_pct_among_submitted": metric(100 * len(final) / len(delays) if delays else None, set(delays), timing_gate),
             "median_days_relative_to_deadline": metric(median(delays.values()) if delays else None, set(delays), timing_gate),
