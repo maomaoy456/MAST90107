@@ -1,6 +1,5 @@
 """Course-separated exploration plus privacy-safe model status."""
-from statistics import mean
-from app.dashboard.academic import score_band
+from statistics import mean, median
 from app.dashboard.activity import group_guard
 from app.dashboard.contracts import TableRow
 from app.dashboard.privacy import metric
@@ -28,6 +27,16 @@ def add_groups(page, rows, course, target, group_name, labels, reason, features=
             blocked = privacy(group, [measured], gate)
             values[feature + '_n'] = metric(len(measured), members, blocked)
             values['mean_' + feature] = metric(mean(r[feature] for r in measured) if measured else None, members, blocked)
+            ordered = sorted(r[feature] for r in measured)
+            def quantile(fraction):
+                if not ordered:
+                    return None
+                position = (len(ordered) - 1) * fraction
+                low, high = int(position), min(int(position) + 1, len(ordered) - 1)
+                return ordered[low] + (ordered[high] - ordered[low]) * (position - low)
+            values['median_' + feature] = metric(median(ordered) if ordered else None, members, blocked)
+            values['q1_' + feature] = metric(quantile(.25), members, blocked)
+            values['q3_' + feature] = metric(quantile(.75), members, blocked)
         page.tables.setdefault("behavior_by_outcome", []).append(TableRow(
             key=f"{course}:{target}:{group_name}:{label}", label=str(label), dimensions=dims, metrics=values))
 
@@ -42,11 +51,11 @@ def build_insights(page, data, scope, reason):
         "analysis": "exploratory_and_modeling", "model_status": "see_model_status", "final_definition": "AT1*0.4+AT2*0.6; effective offering rule applies",
         "badge_prediction_policy": "exclude_AT1_AT2_scores_and_weighted_grade"}, metrics={}) for t in TARGETS]
     questions = (
-        ("engagement_grade", "Engagement and assignment grades", "Views and participations versus scored outcomes, with sample size and uncertainty."),
-        ("page_category", "Page categories and performance", "Content and assessment-page contact versus grades and submission states."),
-        ("timing_submission", "First contact and submission timing", "Contact relative to course start or deadline versus submission, lateness and grade bands."),
-        ("self_assessment", "Self-assessment and scored work", "None, partial, complete and unknown self-assessment groups versus scored outcomes."),
-        ("badge_relationship", "Engagement, submissions and valid Badge", "Engagement plus AT1/AT2 submission indicators versus valid non-revoked Badge evidence."),
+        ("engagement_grade", "Engagement and passing", "Canvas views and interactive actions versus confirmed pass outcomes."),
+        ("page_category", "Learning activity mix", "Content and assessment-page activity among students who passed or did not pass."),
+        ("timing_submission", "When students started and submitted", "Elapsed calendar time from course start or first activity to submission."),
+        ("self_assessment", "Self-assessment and passing", "Self-assessment completion groups versus confirmed pass outcomes."),
+        ("badge_relationship", "Behaviours linked to recorded Badges", "Engagement and AT1/AT2 submission indicators versus valid non-revoked Badge evidence."),
     )
     page.tables['analysis_questions'] = [TableRow(key=key, label=label,
         dimensions={"analysis_area": key, "result": description}, metrics={}) for key, label, description in questions]
@@ -75,26 +84,25 @@ def build_insights(page, data, scope, reason):
                     "macro_f1": metric(scores.get("macro_f1"), model_people) if scores else metric(None, set()),
                     "balanced_accuracy": metric(scores.get("balanced_accuracy"), model_people) if scores else metric(None, set())}))
             rows = target_rows(selected, target)
-            outcomes = ('badge_observed',) if target == 'badge' else ('score',) if target == 'weighted_final' else ('score', 'submitted', 'missing_flag', 'late_flag', 'submission_days_from_deadline')
-            # Protect score-band/submission/badge complements before releasing
+            outcomes = ('badge_observed',) if target == 'badge' else ('score', 'passed') if target == 'weighted_final' else (
+                'score', 'passed', 'submitted', 'submission_days_from_course_start', 'first_activity_to_submission_days')
+            # Protect pass/submission/badge complements before releasing
             # related association statistics or alternative views of those groups.
             for row in rows:
-                row['grade_band'] = score_band(row['score'])
                 row['self_group'] = 'unknown' if row['self_assessment_completion_pct'] is None else 'none' if row['self_assessment_completion_pct'] == 0 else 'all' if row['self_assessment_completion_pct'] == 100 else 'partial'
-            band_labels = ('below_70', '70_to_below_80', '80_and_above', 'unknown')
             partitions = []
             if target == 'badge':
                 labels = ('valid', 'revoked_only', 'no_matched_award', 'needs_review', 'unknown')
                 partitions += [[r for r in rows if r['outcome_group'] == label] for label in labels]
             else:
-                partitions += [[r for r in rows if r['grade_band'] == label] for label in band_labels]
+                partitions += [[r for r in rows if r['passed'] == value] for value in (0, 1, None)]
                 if target != 'weighted_final':
                     partitions += [[r for r in rows if r['submitted'] == state] for state in (0, 1, None)]
             gate = privacy(rows, partitions, base)
             if target == 'badge':
                 add_groups(page, rows, course, target, 'outcome_group', labels, gate, features)
             else:
-                add_groups(page, rows, course, target, 'grade_band', band_labels, gate)
+                add_groups(page, rows, course, target, 'passed', (0, 1, None), gate)
                 if target != 'weighted_final':
                     add_groups(page, rows, course, target, 'submitted', (0, 1, None), gate)
             for outcome in outcomes:
@@ -117,13 +125,13 @@ def build_insights(page, data, scope, reason):
                     count_gate = privacy(rows, [valid, linked, sample], gate)
                     blocked = privacy(rows, [valid, linked, sample])
                     blocked = privacy(sample, [[r for r in sample if r['offering'] == o] for o in course_scope], blocked)
-                    if outcome in {'submitted', 'missing_flag', 'late_flag', 'badge_observed'}:
+                    if outcome in {'submitted', 'passed', 'badge_observed'}:
                         blocked = privacy(sample, [[r for r in sample if r[outcome] == value] for value in (0, 1)], blocked)
                     stats = association(sample, feature, outcome) if len(members) >= 5 and not blocked else {
                         k: None for k in ('spearman_rho', 'within_offering_rank_r', 'rho_ci_low', 'rho_ci_high')}
                     area = "badge_relationship" if target == "badge" else "self_assessment" if feature == "self_assessment_completion_pct" else \
                         "engagement_grade" if feature in {"views", "participations"} else "page_category" if feature in {
-                            "content_view_share", "assessment_view_share", "first_content_days_from_deadline", "first_assessment_days_from_deadline"} else "timing_submission"
+                            "content_view_share", "assessment_view_share"} else "timing_submission"
                     page.tables.setdefault('associations', []).append(TableRow(key=f'{course}:{target}:{outcome}:{feature}',
                         label=feature, dimensions=dims | {'feature': feature, 'analysis_area': area,
                                                           'ci_method': 'student_cluster_percentile_bootstrap_200'},
@@ -144,8 +152,8 @@ def build_insights(page, data, scope, reason):
         "All outputs are aggregate. Student identifiers and row-level student records are never returned; selected-batch correlations remain descriptive rather than causal.",
         "Retrospective association, not causation or a fitted prediction. Within-offering rank association removes mean offering ranks, not all confounding. No significance claims or personal scatter points.",
         "Raw Spearman intervals use 200 student-cluster bootstrap resamples, require >=20 distinct students and >=180 valid replicates. Constant variables and insufficient samples return unknown.",
-        "Views/participations span the source export, not a reconstructed pre-deadline window. First-contact date count is not active days or time spent; date estimates are not historical click logs.",
+        "Views/interactive actions span the source export. First-contact dates are not active days; time to submission is elapsed calendar time, not time spent working.",
         "Grade bands: <70, 70<=score<80, >=80; unavailable scores never become low grades. Weighted final is a derived grade, not a separate assessment.",
         "Badge observed=1 means valid matched non-revoked evidence; 0 combines revoked-only/no matched award for descriptive comparison, not proven academic failure. Detailed states remain separate.",
-        "Binary outcome means are proportions; score means are percentages; submission delay is days (positive means after deadline). Self completion uses only observed, non-excused activities with known submission states.",
+        "Binary outcome means are proportions. Submission timing is measured in days from course start or first recorded activity. Self completion uses only observed, non-excused activities with known submission states.",
         "Survey is anonymous and Salesforce has no student join; neither is a personal feature. Badge models exclude AT1/AT2 scores and derived weighted grades."]

@@ -1,28 +1,28 @@
 "use strict";
 
-import { clearSpecialPage, renderSpecialPage } from "./page-visuals.js?v=20260917-1";
-import { renderInsightsPage } from "./insights-visuals.js?v=20260917-1";
+import { clearSpecialPage, renderSpecialPage } from "./page-visuals.js?v=20260922-1";
+import { renderInsightsPage } from "./insights-visuals.js?v=20260922-1";
 
 const state = { catalog: null, page: "overview", course: "", offering: "", assignments: new Set(), interval: "day", mode: "combined", supportTopic: "all", outcomesTab: "badge", insightsTab: "exploration", insightArea: "engagement_grade", explorationTarget: "AT1", modelTarget: "all" };
 const pageNames = {
   overview: "Overview", engagement: "Engagement", assignments: "Assignments",
-  outcomes: "Badge & Outcomes", insights: "Insights", "data-rules": "Data & Rules"
+  outcomes: "Badge & Feedback", insights: "Insights", "data-rules": "Data & Rules"
 };
 if (location.hash.slice(1) in pageNames) state.page = location.hash.slice(1);
 const knownLabels = {
   students: "Students", offerings: "Offerings", courses: "Courses", records: "Records",
   macro_f1: "Macro F1", balanced_accuracy: "Balanced Accuracy",
   engagement_students: "Engagement students", assignment_students: "Assignment students",
-  intersection_students: "Students in both sources", badge_completion_rate_pct: "Badge completion rate (%)",
-  valid_award_holders: "Valid Badge holders", cohort_memberships: "Cohort memberships",
+  intersection_students: "Students linked across Canvas sources", badge_completion_rate_pct: "Recorded Badge rate (%)",
+  valid_award_holders: "Students with an active Badge", cohort_memberships: "Students represented",
   mean_score_pct: "Mean score (%)", submission_rate_pct: "Submission rate (%)",
 };
 const cohortLabels = {
-  source_specific: "Source-specific cohorts; student counts can differ between sources",
-  all_engagement: "All Engagement students in the selected offering scope",
-  all_assignment: "All Assignment students in the selected offering scope",
-  engagement_student_offering_memberships: "Engagement students in the selected offering scope",
-  course_separated_student_offering_records: "Linked student-offering records pooled across this course",
+  source_specific: "Student groups from each available data source",
+  all_engagement: "Students with Canvas activity in the selected teaching period",
+  all_assignment: "Students with assignment records in the selected teaching period",
+  engagement_student_offering_memberships: "Students with Canvas activity, counted once per teaching period",
+  course_separated_student_offering_records: "Linked student records pooled across teaching periods for this course",
   metadata_only: "Source and rule metadata for the selected scope"
 };
 const colours = ["#355b88", "#d97706", "#16856b", "#8b5cf6", "#dc4c64", "#64748b"];
@@ -141,7 +141,7 @@ function currentParams(extra = {}) {
 
 function filterMarkup() {
   if (["engagement", "outcomes"].includes(state.page)) return `<label>Time interval<select id="interval"><option value="day">Day</option><option value="week">Week</option><option value="month">Month</option></select></label>`;
-  if (state.page === "assignments") return `<label>Assignment type<select id="mode"><option value="combined">Combined</option><option value="scored">Scored</option><option value="self_assessment">Self-assessment</option></select></label><fieldset class="assignment-picker"><legend>Assignments</legend><div id="assignmentChoices">Loading…</div></fieldset>`;
+  if (state.page === "assignments") return `<label>Assignment type<select id="mode"><option value="combined">All activities</option><option value="scored">Scored</option><option value="self_assessment">Self-assessment</option></select></label><fieldset class="assignment-picker"><legend>Assignments</legend><div id="assignmentChoices">Loading…</div></fieldset>`;
   return "";
 }
 
@@ -215,7 +215,7 @@ async function loadPage() {
     if (requestId !== pageRequest) return;
     const models = state.page === "insights" ? await api(`/v1/models?${new URLSearchParams({course: state.course})}`) : null;
     if (requestId !== pageRequest) return;
-    el("cohort").textContent = `Analysis scope: ${cohortLabels[data.cohort] || label(data.cohort)}`;
+    el("cohort").textContent = `Population included: ${cohortLabels[data.cohort] || label(data.cohort)}`;
     clearSpecialPage(el);
     el("modelPanel").innerHTML = "";
     if (state.page === "insights") {

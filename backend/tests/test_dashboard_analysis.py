@@ -36,6 +36,30 @@ def test_unknown_view_dates_and_small_temporal_groups_are_visible(dashboard):
         assert any(r['dimensions']['period'] == 'unknown' for r in page['tables']['activity_by_start_date'])
 
 
+def test_business_pass_other_breakdown_and_course_start_timing(dashboard):
+    client, session, offering = dashboard
+    offering.starts_on = date(2025, 3, 1)
+    event = session.scalar(select(EngagementEvent))
+    event.event_type = 'external_tool'
+    item = session.scalar(select(Assignment).where(Assignment.source_key == 'AT1'))
+    item.assessment_key, item.mapping_status = 'AT1', 'confirmed'
+    rows = list(session.scalars(select(AssignmentSubmission).where(AssignmentSubmission.assignment_id == item.id)))
+    for index, row in enumerate(rows):
+        row.score = 80 if index < 5 else 60
+        row.submitted_at = datetime(2025, 3, 11, 0)
+    session.commit()
+    engagement = client.get('/api/v1/engagement', headers=HEADERS).json()
+    assert any(row['dimensions']['resource_type'] == 'external_tools' for row in engagement['tables']['other_resource_types'])
+    assignment = client.get('/api/v1/assignments', params={'assignments': 'AT1'}, headers=HEADERS).json()
+    assessment = assignment['tables']['assessments'][0]['metrics']
+    assert assessment['passed_students']['value'] == 5
+    assert assessment['pass_rate_pct']['value'] == 25
+    status = {row['dimensions']['band']: row['metrics']['students']['value'] for row in assignment['tables']['assessment_pass_status']}
+    assert status == {'below_pass_mark': 15, 'passed': 5}
+    timing = assignment['tables']['assignment_submission_time'][0]['metrics']
+    assert timing['median_days_from_course_start']['value'] == 10
+
+
 def test_assignment_selection_preserves_names_null_attempts_and_lateness(dashboard):
     client, session, offering = dashboard
     item = session.scalar(select(Assignment).where(Assignment.source_key == 'AT1'))

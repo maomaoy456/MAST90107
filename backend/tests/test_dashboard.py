@@ -180,3 +180,6 @@ def test_badges_resolve_from_engagement_without_course_dates(dashboard):
     response = client.get("/api/v1/outcomes", params={"offering": offering.offering_code}, headers=HEADERS)
     assert response.json()["metrics"]["valid_award_holders"]["value"] == 20
     assert response.json()["metrics"]["badge_completion_rate_pct"]["value"] == 100
+    reconciliation = {row["key"]: row["metrics"]["students"]["value"] for row in response.json()["tables"]["badge_course_reconciliation"]}
+    assert reconciliation["passed_and_badge"] == 0
+    assert reconciliation["badge_recorded_pass_not_confirmed"] == 20

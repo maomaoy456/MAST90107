@@ -70,8 +70,8 @@ def late_seconds(row):
     return float(value) if math.isfinite(value) and value >= 0 else None
 
 
-def distributions(rows):
-    groups = {name: defaultdict(set) for name in ("submission_status", "missing_flag", "late_flag", "attempt_distribution", "late_duration", "score_distribution", "self_assessment_completion")}
+def distributions(rows, pass_threshold=70):
+    groups = {name: defaultdict(set) for name in ("submission_status", "missing_flag", "late_flag", "attempt_distribution", "late_duration", "score_distribution", "assessment_pass_status", "self_assessment_completion")}
     for row in rows:
         student = row.student_id
         groups["submission_status"][row.status].add(student)
@@ -86,6 +86,8 @@ def distributions(rows):
         score = percentage(row)
         band = "unknown" if score is None else "below_70" if score < 70 else "70_to_below_80" if score < 80 else "80_and_above"
         groups["score_distribution"][band].add(student)
+        result = "result_unavailable" if score is None else "passed" if score >= pass_threshold else "below_pass_mark"
+        groups["assessment_pass_status"][result].add(student)
         if (row.source_fields or {}).get("points_possible") == 0:
             state = "excused" if row.excused else "submitted" if row.status in {"submitted", "graded"} else "unsubmitted" if row.status == "unsubmitted" else "unknown"
             groups["self_assessment_completion"][state].add(student)
@@ -121,6 +123,11 @@ def build_assignments(page, data, scope, reason):
         score_gate = base_gate
         late_gate = group_guard([late, measured_late], members, base_gate)
         values = [percentage(r) for r in group if percentage(r) is not None]
+        rule = data.rule(data.offerings[a.offering_id])
+        threshold = float(rule.pass_threshold) if rule else 70.0
+        passed = {r.student_id for r in group if percentage(r) is not None and percentage(r) >= threshold}
+        below = graded - passed
+        unavailable = members - graded
         durations = [late_seconds(r) / 3600 for r in group if late_seconds(r) is not None]
         dims = {"offering": data.offerings[a.offering_id].offering_code or "unlabelled", "assignment_ref": a.source_key,
                 "assessment_key": a.assessment_key if a.mapping_status == "confirmed" else "unconfirmed",
@@ -131,9 +138,13 @@ def build_assignments(page, data, scope, reason):
             "submission_rate_pct": metric(100 * len(submitted) / len(members) if members else None, members, score_gate),
             "graded_students": metric(len(graded), graded, score_gate),
             "mean_score_pct": metric(mean(values) if values else None, graded, score_gate),
+            "passed_students": metric(len(passed), passed, score_gate),
+            "below_pass_mark_students": metric(len(below), below, score_gate),
+            "result_unavailable_students": metric(len(unavailable), unavailable, score_gate),
+            "pass_rate_pct": metric(100 * len(passed) / len(graded) if graded else None, graded, score_gate),
             "late_students": metric(len(late), late, late_gate),
             "mean_late_hours": metric(mean(durations) if durations else None, measured_late, late_gate)}))
-        for name, bins in distributions(group).items():
+        for name, bins in distributions(group, threshold).items():
             for row in partition([(k, k, v) for k, v in sorted(bins.items())], reason=base_gate):
                 row.dimensions = dims | {"band": row.key}
                 row.key = key + ":" + row.key

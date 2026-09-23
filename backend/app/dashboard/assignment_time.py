@@ -3,11 +3,21 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from statistics import median
 from app.dashboard.activity import group_guard
+from app.dashboard.activity import local_date
 from app.dashboard.contracts import TableRow
 from app.dashboard.privacy import metric, partition
 from app.ingestion.normalize import timestamp
 
 OFFSETS = (-30, -14, -7, -3, -1, 0, 1, 3, 7, 14, 30)
+
+
+def percentile(values, fraction):
+    values = sorted(values)
+    if not values:
+        return None
+    position = (len(values) - 1) * fraction
+    lower, upper = int(position), min(int(position) + 1, len(values) - 1)
+    return values[lower] + (values[upper] - values[lower]) * (position - lower)
 
 
 def deadline(row):
@@ -35,11 +45,31 @@ def add_assignment_time(page, data, scope):
                 "as_of_utc": cutoff.isoformat() + "Z"}
         key = code + ":" + assignment.source_key
         members = {r.student_id for r in group}
+        base = data.privacy_reason({assignment.offering_id})
+        start = data.offerings[assignment.offering_id].starts_on
+        elapsed = {r.student_id: (local_date(r.submitted_at) - start).days for r in group
+                   if r.submitted_at is not None and start is not None
+                   and r.status in {"submitted", "graded"} and not r.excused}
+        elapsed_people = set(elapsed)
+        elapsed_gate = group_guard([elapsed_people], members, base)
+        page.tables.setdefault("assignment_submission_time", []).append(TableRow(
+            key=key, label=assignment_name(assignment), dimensions=dims | {"reference": "course_start"}, metrics={
+                "students_with_submission_time": metric(len(elapsed_people), elapsed_people, elapsed_gate),
+                "median_days_from_course_start": metric(median(elapsed.values()) if elapsed else None, elapsed_people, elapsed_gate),
+                "q1_days_from_course_start": metric(percentile(elapsed.values(), .25), elapsed_people, elapsed_gate),
+                "q3_days_from_course_start": metric(percentile(elapsed.values(), .75), elapsed_people, elapsed_gate)}))
+        elapsed_bins = defaultdict(set)
+        for student, days in elapsed.items():
+            band = "before_course_start" if days < 0 else "week_1" if days < 7 else "week_2" if days < 14 else "weeks_3_4" if days < 28 else "week_5_or_later"
+            elapsed_bins[band].add(student)
+        for item in partition([(name, name, people) for name, people in elapsed_bins.items()], reason=elapsed_gate):
+            item.dimensions = dims | {"band": item.key, "reference": "course_start"}
+            item.key = key + ":" + item.key
+            page.tables.setdefault("assignment_submission_time_distribution", []).append(item)
         eligible = [r for r in group if deadline(r) is not None and deadline(r) <= cutoff]
         due = {r.student_id for r in eligible}
         pending = {r.student_id for r in group if deadline(r) is not None and deadline(r) > cutoff}
         unknown = members - due - pending
-        base = data.privacy_reason({assignment.offering_id})
         gate = group_guard([due, pending, unknown], members, base)
         for row in partition([("due", "Deadline passed", due), ("not_yet_due", "Not yet due", pending),
                               ("unknown_deadline", "Unknown deadline", unknown)], reason=gate):
@@ -77,16 +107,16 @@ def add_assignment_time(page, data, scope):
             page.tables.setdefault("assignment_cumulative_submission", []).append(TableRow(key=key + ":" + str(offset), label=str(offset),
                 dimensions=dims | {"days_relative_to_deadline": str(offset), "fully_observed": str(fully_observed).lower()}, metrics={
                     "submitted_pct": metric(100 * len(submitted) / len(due), due, curve_gate) if fully_observed else metric(None, set())}))
-    # Pairing is opt-in, exactly two selected references in one offering. Students
-    # without both exported records remain outside the paired denominator.
+    # Pairing is opt-in and deadline-independent. Students without both exported
+    # records remain outside the paired denominator.
     if refs and len(refs) == 2 and len(scope) == 1:
         selected_ids = [i for i in indexed if data.assignments[i].source_key in refs]
         if len(selected_ids) == 2:
             left, right = [{r.student_id: r for r in indexed[i]} for i in selected_ids]
-            eligible = {s for s in left.keys() & right.keys() if all(deadline(r) is not None and deadline(r) <= cutoff for r in (left[s], right[s]))}
+            eligible = left.keys() & right.keys()
             bins = {k: set() for k in ("both_submitted", "first_only", "second_only", "neither_submitted")}
             for s in eligible:
-                a, b = [r.submitted_at is not None and r.submitted_at <= cutoff for r in (left[s], right[s])]
+                a, b = [r.status in {"submitted", "graded"} and r.submitted_at is not None and r.submitted_at <= cutoff for r in (left[s], right[s])]
                 bins["both_submitted" if a and b else "first_only" if a else "second_only" if b else "neither_submitted"].add(s)
             union = set(left) | set(right)
             gate = group_guard([eligible], union, data.privacy_reason(scope))
@@ -96,4 +126,4 @@ def add_assignment_time(page, data, scope):
                 page.tables.setdefault("assignment_pair_submission", []).append(row)
     page.notes += ["Timing uses recorded timestamps and source deadlines as of the current query time. Source late flags remain separate; missing deadlines do not become overdue.",
         "Cumulative curves keep all deadline-eligible records in the denominator. Points without complete follow-up are unknown. Overwritten historical exports cannot be reconstructed.",
-        "Grading interval is submission-to-grading, not verified feedback release. Pair comparison requires two explicitly selected assignments in one offering, both deadlines passed and both records present."]
+        "Submission time from course start is elapsed calendar time, not time spent working. Pair comparison requires two explicitly selected assignments in one offering and both records present."]

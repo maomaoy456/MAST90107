@@ -23,9 +23,10 @@ def add_calendar(page, data, scope):
         dims = {"offering": code, "starts_on": str(offering.starts_on or "unknown"),
                 "ends_on": str(offering.ends_on or "unknown"), "phase": phase(offering, today()), "as_of": str(today())}
         page.tables["course_calendar"].append(TableRow(key=code, label=code, dimensions=dims, metrics={}))
+        support_batch = data.extra_batches.get("support:" + data.courses[offering.course_id].code)
         page.coverage[code] = {"calendar": calendar is not None,
             "survey": "survey:" + code in data.extra_batches,
-            "support": "support:" + data.courses[offering.course_id].code in data.extra_batches,
+            "support": support_batch is not None and (support_batch.summary or {}).get("course_scope_verified") is True,
             "engagement": any(r.offering_id == key for r in data.engagement),
             "assignment": any(data.assignments[r.assignment_id].offering_id == key for r in data.submissions)}
         if page.page == "overview" and calendar:

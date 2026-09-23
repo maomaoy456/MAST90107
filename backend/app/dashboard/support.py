@@ -15,9 +15,22 @@ def selected_cases(data, scope):
 
 def add_support(page, data, scope):
     courses = {data.offerings[o].course_id for o in scope}
-    available = {c for c in courses if "support:" + data.courses[c].code in data.extra_batches}
+    available, unverified = set(), set()
+    for course in courses:
+        code = data.courses[course].code
+        batch = data.extra_batches.get("support:" + code)
+        if batch is None:
+            continue
+        (available if (batch.summary or {}).get("course_scope_verified") is True else unverified).add(course)
+    for course in sorted(unverified):
+        code = data.courses[course].code
+        page.tables.setdefault("support_data_status", []).append(TableRow(
+            key=code, label=code, dimensions={"course": code, "status": "excluded_unverified_scope",
+                "reason": "date_window_only_no_course_field"}, metrics={}))
     if not available:
         page.metrics["support_records"] = metric(None, set())
+        if unverified:
+            page.notes.append("Support results are excluded because the supplied case export has no verified course field or enrolment link; date overlap alone does not establish course membership.")
         return
     selected = selected_cases(data, scope)
     population = {r.id for r in selected}
@@ -77,5 +90,7 @@ def add_support(page, data, scope):
         "Overlapping windows do not identify a case's offering. Counts are case records, not unique students or verified unique cases; no title/time-based deletion is performed.",
         "Age (Hours) is response time, confirmed by the user. Valid extremes are retained; invalid/missing values remain unknown.",
         "Support topics use keyword_rules_v1, can overlap and are not validated sentiment. Owners and account names are not stored."]
+    if unverified:
+        page.notes.append("Some selected courses have Support exports that are excluded because their course scope is not verifiable.")
     if page.page == "engagement":
         page.notes.append("Up to five frequent representative issue titles per topic are included after automated direct-identifier redaction; these are source subjects, not generated summaries or complete case descriptions.")

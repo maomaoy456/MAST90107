@@ -119,15 +119,17 @@ def test_support_window_timezone_missing_subject_and_response_time(dashboard, tm
     response = client.get('/api/v1/engagement', headers=HEADERS)
     assert 'private person' not in response.text
     page = response.json()
-    assert page['metrics']['support_records']['value'] == 10
-    assert page['tables']['support_summary'][0]['metrics']['median_response_hours']['value'] == 0
+    assert page['metrics']['support_records']['value'] is None
+    assert page['tables']['support_data_status'][0]['dimensions']['status'] == 'excluded_unverified_scope'
+    assert 'support_summary' not in page['tables']
 
 
 def test_support_representative_titles_remove_direct_identifiers(dashboard):
     client, session, offering = dashboard
     offering.starts_on, offering.ends_on = date(2025, 3, 1), date(2025, 3, 31)
     batch = ImportBatch(source='salesforce', scope='support:0AUTI0001', file_sha256='f'*64,
-        importer_version='synthetic', status='completed', finished_at=datetime(2026, 1, 1))
+        importer_version='synthetic', status='completed', finished_at=datetime(2026, 1, 1),
+        summary={'course_scope_verified': True})
     session.add(batch); session.flush()
     for i in range(10):
         session.add(SupportCase(batch_id=batch.id, course_id=offering.course_id, source_row=i+2,

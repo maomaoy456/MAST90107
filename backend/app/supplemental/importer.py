@@ -118,7 +118,8 @@ def import_support(session, path, course_code, key):
     frame = readers.salesforce(raw)
     if not {"Subject", "Date/Time Opened", "Age (Hours)", "Open", "Closed", "Case Origin"} <= set(frame):
         raise ValueError("support_columns")
-    if "Course Name" in frame and not frame["Course Name"].dropna().eq(course.name).all():
+    course_scope_verified = "Course Name" in frame
+    if course_scope_verified and not frame["Course Name"].dropna().eq(course.name).all():
         raise ValueError("course_name_mismatch")
     times = pd.to_datetime(frame["Date/Time Opened"], format="mixed", dayfirst=True, errors="coerce")
     # The current export supplies naive Melbourne times. Ambiguous local times
@@ -146,4 +147,7 @@ def import_support(session, path, course_code, key):
     windows = sorted((o.offering_code, o.starts_on.isoformat(), o.ends_on.isoformat()) for o in offerings)
     return save(session, "salesforce", "support:" + course_code, hashlib.sha256(raw).hexdigest(), rows,
         SupportCase, {"input_rows": len(frame), "outside_window_rows": int((~mask & local.notna()).sum()),
-                      "quality": dict(quality), "windows": windows}, key, dependency=str(windows))
+                      "quality": dict(quality), "windows": windows,
+                      "course_scope_verified": course_scope_verified,
+                      "course_attribution": "verified_course_name" if course_scope_verified else "date_window_only"},
+        key, dependency=str(windows) + "|course_scope_v2:" + str(course_scope_verified))

@@ -9,8 +9,12 @@ from app.dashboard.engagement import category
 
 FEATURES = ("views", "participations", "content_view_share", "assessment_view_share",
             "first_contact_days_from_start", "first_contact_date_count", "self_assessment_completion_pct",
-            "first_contact_days_from_deadline", "first_content_days_from_deadline", "first_assessment_days_from_deadline")
-BADGE_FEATURES = FEATURES + ("AT1_submitted", "AT2_submitted")
+            "submission_days_from_course_start", "first_activity_to_submission_days")
+BADGE_FEATURES = (
+    "views", "participations", "content_view_share", "assessment_view_share",
+    "first_contact_days_from_start", "first_contact_date_count",
+    "self_assessment_completion_pct", "AT1_submitted", "AT2_submitted",
+)
 
 
 def submission_state(row):
@@ -54,7 +58,8 @@ def learning_records(data, scope):
         rate = 100 * sum(r.status in {"submitted", "graded"} for r in own) / len(own) if known_self else None
         category_first = {kind: min((r.first_viewed_on for r in events if category(r) == kind and r.first_viewed_on), default=None) for kind in ('content', 'assessment')}
         result[pair] = dict(student=student, offering=offering_id, course=offering.course_id, category_first=category_first,
-            engagement_available=bool(events), academic=academic_result, first=first, badge=badges.get(pair, "unknown"),
+            engagement_available=bool(events), academic=academic_result, first=first, course_start=offering.starts_on,
+            badge=badges.get(pair, "unknown"),
             views=views, participations=participates,
             content_view_share=100 * sum(r.times_viewed for r in events if category(r) == "content") / views if views else None,
             assessment_view_share=100 * sum(r.times_viewed for r in events if category(r) == "assessment") / views if views else None,
@@ -68,28 +73,34 @@ def learning_records(data, scope):
 def target_rows(records, target):
     rows = []
     for pair, record in records.items():
-        row = dict(record, first_contact_days_from_deadline=None, first_content_days_from_deadline=None,
-                   first_assessment_days_from_deadline=None, score=None, submitted=None)
+        row = dict(record, submission_days_from_course_start=None, first_activity_to_submission_days=None,
+                   score=None, submitted=None, passed=None)
         academic = record['academic']
         if target == "badge":
             row['outcome_group'] = record['badge']
             row['badge_observed'] = 1 if record['badge'] == "valid" else 0 if record['badge'] in {"revoked_only", "no_matched_award"} else None
         elif target == "weighted_final":
             row['score'] = float(academic['final']) if academic and academic['final'] is not None else None
+            if row['score'] is not None:
+                row['passed'] = int(row['score'] >= float(academic['rule'].pass_threshold))
         else:
             source = academic['rows'].get(target) if academic else None
             score = academic['scores'].get(target) if academic else None
             row['score'] = float(score) if score is not None else None
+            if row['score'] is not None:
+                row['passed'] = int(row['score'] >= float(academic['rule'].pass_threshold))
             if source:
                 row['missing_flag'] = int(source.missing) if source.missing is not None else None
                 row['late_flag'] = int(source.late) if source.late is not None else None
                 row['submitted'] = 1 if source.status in {"submitted", "graded"} else 0 if source.status in {"unsubmitted", "missing"} else None
                 if source.excused:
                     row['submitted'] = None
-                due = local_date(deadline(source))
-                row['first_contact_days_from_deadline'] = (record['first'] - due).days if record['first'] and due else None
-                for kind, first in record['category_first'].items():
-                    row['first_' + kind + '_days_from_deadline'] = (first - due).days if first and due else None
+                submitted = local_date(source.submitted_at)
+                if submitted is not None and record['first'] is not None:
+                    row['first_activity_to_submission_days'] = (submitted - record['first']).days
+                if submitted is not None and record['course_start'] is not None:
+                    row['submission_days_from_course_start'] = (submitted - record['course_start']).days
+                due = deadline(source)
                 row['submission_days_from_deadline'] = (source.submitted_at - deadline(source)).total_seconds() / 86400 if source.submitted_at and due else None
         row['pair'] = pair
         rows.append(row)

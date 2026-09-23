@@ -3,6 +3,7 @@ from collections import defaultdict
 from app.dashboard.activity import bucket, local_date, group_guard
 from app.dashboard.contracts import Metric, TableRow
 from app.dashboard.privacy import metric
+from app.dashboard.academic import academic_records
 
 
 def resolve_awards(data):
@@ -38,21 +39,37 @@ def build_outcomes(page, data, scope, reason):
     states = {"valid": valid, "revoked_only": revoked - valid,
               "needs_review": ambiguous - valid - revoked,
               "no_matched_award": population - valid - revoked - ambiguous}
+    academic = academic_records(data, scope)
+    passed = {pair for pair in population if pair in academic and academic[pair]["state"] == "pass"}
+    reconciliation = {"passed_and_badge": passed & valid,
+        "passed_no_badge_record": passed - valid,
+        "badge_recorded_pass_not_confirmed": valid - passed,
+        "neither_confirmed": population - passed - valid}
     blocked = group_guard(list(states.values()), population, reason)
     page.metrics = {"cohort_memberships": metric(len(population), population, blocked),
         "valid_award_holders": metric(len(valid), valid, blocked),
         "badge_completion_rate_pct": metric(100 * len(valid) / len(population) if population else None, population, blocked),
+        "confirmed_course_passes": metric(len(passed), passed, blocked),
+        "confirmed_course_pass_rate_pct": metric(100 * len(passed) / len(population) if population else None, population, blocked),
+        "passed_without_badge_record": metric(len(reconciliation["passed_no_badge_record"]), reconciliation["passed_no_badge_record"], blocked),
+        "badge_without_confirmed_pass": metric(len(reconciliation["badge_recorded_pass_not_confirmed"]), reconciliation["badge_recorded_pass_not_confirmed"], blocked),
         "revoked_only_holders": metric(len(states["revoked_only"]), states["revoked_only"], blocked)}
     page.tables["badge_status"] = [TableRow(key=k, label=k, metrics={"memberships": metric(len(v), v, blocked)}) for k, v in states.items()]
+    page.tables["badge_course_reconciliation"] = [TableRow(key=k, label=k,
+        dimensions={"unit": "engagement_student_offering_memberships"},
+        metrics={"students": metric(len(v), v, blocked)}) for k, v in reconciliation.items()]
     page.tables["offering_comparison"] = []
     for offering in sorted(scope):
         members = {p for p in population if p[1] == offering}
         holders = valid & members
+        offering_passed = passed & members
         code = data.offerings[offering].offering_code or "unlabelled"
         gate = group_guard([v & members for v in states.values()], members, reason)
         page.tables["offering_comparison"].append(TableRow(key=code, label=code, dimensions={"offering": code}, metrics={
             "cohort_students": metric(len(members), members, gate),
             "valid_award_holders": metric(len(holders), holders, gate),
+            "confirmed_course_passes": metric(len(offering_passed), offering_passed, gate),
+            "confirmed_course_pass_rate_pct": metric(100 * len(offering_passed) / len(members) if members else None, members, gate),
             "badge_completion_rate_pct": metric(100 * len(holders) / len(members) if members else None, members, gate)}))
     # Diagnostics count records, not deduplicated people. Without identity a record
     # cannot be placed into an offering, so this table is explicitly course-wide.
@@ -75,6 +92,7 @@ def build_outcomes(page, data, scope, reason):
         "Revoked-only means unsuccessful badge evidence, not an academic fail. No matched award is distinct from revoked, and is not an academic fail.",
         "A separate valid award takes precedence over revoked historical awards. Repeated awards are deduplicated for rates, but retained in record counts.",
         "Missing identities, unmatched identities and multiple offerings remain review diagnostics; the observed rate is not proof of final academic completion.",
+        "Course pass and recorded Badge use the same Engagement student-offering denominator in the reconciliation table. Differences remain visible and are never manually balanced.",
         "Diagnostics cover selected courses across all offerings; unresolved records cannot be attributed to a selected offering.",
         "Award timeline uses supplied issue dates in Melbourne time, with an unknown-date bucket; dates are never used to infer intake.",
         "Resolution is calculated from latest snapshots; stored legacy import match_status/outcome fields are not used as dashboard conclusions."]
