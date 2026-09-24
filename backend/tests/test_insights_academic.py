@@ -52,14 +52,14 @@ def test_exact_weighted_boundary_missing_scores_and_relevant_pages(dashboard):
     assert sum(r['state'] == 'pass' for r in records.values()) == 10
     assert sum(r['state'] == 'below_threshold' for r in records.values()) == 5
     assert sum(r['state'] == 'unknown' for r in records.values()) == 5
-    for page in ('overview', 'assignments', 'outcomes'):
+    for page in ('overview', 'assignments'):
         result = client.get('/api/v1/' + page, headers=HEADERS).json()
         metrics = result['tables']['academic_results'][0]['metrics']
         assert metrics['passed']['value'] == 10
         assert metrics['unknown']['value'] == 5
         assert metrics['pass_rate_among_complete_pct']['value'] == pytest.approx(100*10/15, abs=.0001)
     result = client.get('/api/v1/outcomes', headers=HEADERS).json()
-    assert result['metrics']['valid_award_holders']['value'] is None  # No badge export; grades cannot create awards.
+    assert result['metrics']['survey_completed_responses']['value'] is None
     assert [score_band(Decimal(x)) for x in ('69.9999','70','79.9999','80')] == ['below_70','70_to_below_80','70_to_below_80','80_and_above']
 
 
@@ -155,10 +155,10 @@ def test_badge_revocation_does_not_change_academic_pass(dashboard):
         session.add(BadgeAward(batch_id=batch.id, source_row=index+2, badge_class_id=badge.id, student_id=student,
             revoked=index < 5, match_status='manual_review', outcome='unknown'))
     session.commit()
-    result = client.get('/api/v1/outcomes', headers=HEADERS).json()
+    result = client.get('/api/v1/assignments', headers=HEADERS).json()
     assert result['tables']['academic_results'][0]['metrics']['passed']['value'] == 10
-    assert result['metrics']['valid_award_holders']['value'] == 15
-    assert result['metrics']['revoked_only_holders']['value'] == 5
+    assert result['metrics']['active_badge_students']['value'] == 15
+    assert result['metrics']['revoked_badge_only_students']['value'] == 5
 
 
 def test_partial_batch_correlation_is_aggregate_and_badge_has_no_grade_inputs(dashboard):

@@ -79,7 +79,7 @@ def page_endpoint(name):
             raise HTTPException(422)
         if name != "assignments" and query.assignments:
             raise HTTPException(422)
-        if name not in {"engagement", "outcomes"} and query.interval != "day":
+        if name != "engagement" and query.interval != "day":
             raise HTTPException(422)
         data = Snapshot(session)
         return make_page(name, data, query)
@@ -93,7 +93,7 @@ for name in ("overview", "engagement", "assignments", "outcomes", "insights", "d
                   for key in ("course", "offering")]
     parameters.append({"name": "offerings", "in": "query", "schema": {"type": "string"},
                        "description": "Comma-separated offering codes, at most 20; cannot combine with offering."})
-    if name in {"engagement", "outcomes"}:
+    if name == "engagement":
         parameters.append({"name": "interval", "in": "query", "schema": {"type": "string", "enum": ["day", "week", "month"], "default": "day"}})
     if name == "assignments":
         parameters.append({"name": "assignments", "in": "query", "schema": {"type": "string"},

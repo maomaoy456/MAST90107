@@ -4,14 +4,39 @@ import re
 LIKERT = {v: i for i, v in enumerate(("Strongly disagree", "Slightly disagree",
     "Neither agree nor disagree", "Slightly agree", "Strongly agree"), 1)}
 THEMES = {
-    "course_experience": {"Q1_1": "Intellectually engaging", "Q1_2": "Clear expectations",
-        "Q1_3": "Research and practice", "Q1_4": "Helpful resources", "Q1_5": "Overall learning experience"},
-    "learning_experience": {"Q3.0_1": "Valuable feedback", "Q3.0_2": "Peer interaction",
-        "Q3.0_3": "Manageable workload", "Q3.0_4": "Industry representation"},
-    "impact": {"Q4.0_1": "New ideas and skills", "Q4.0_2": "Application to practice",
-        "Q4.0_3": "Challenged thinking", "Q4.0_4": "Workplace skills", "Q4.0_5": "Conceptual understanding"},
-    "assessment": {"Q5.0_1": "Demonstrated learning", "Q5.0_2": "Improved understanding",
-        "Q5.0_3": "Current workplace relevance", "Q5.0_4": "Future workplace relevance", "Q5.0_5": "Clear grading criteria"},
+    "course_experience": {
+        "Q1_1": "I found the MicroCert intellectually engaging and stimulating",
+        "Q1_2": "The MicroCert set clear expectations, including assessment requirements",
+        "Q1_3": "The MicroCert reflected the latest research and practice",
+        "Q1_4": "The learning resources were helpful",
+        "Q1_5": "Overall, I had a very good learning experience",
+    },
+    "learning_experience": {
+        "Q3.0_1": "I received valuable feedback on my learning progress",
+        "Q3.0_2": "I had opportunities to interact meaningfully with peers",
+        "Q3.0_3": "I could manage the learning workload within the available timeframe",
+        "Q3.0_4": "I was satisfied with the level of industry representation",
+    },
+    "impact": {
+        "Q4.0_1": "I learned new ideas, approaches or skills",
+        "Q4.0_2": "I learned to apply knowledge to practice",
+        "Q4.0_3": "The MicroCert challenged my way of thinking",
+        "Q4.0_4": "I developed skills that will help me in the workplace",
+        "Q4.0_5": "I improved my understanding of concepts and principles in the field",
+    },
+    "assessment": {
+        "Q5.0_1": "Assessment tasks allowed me to demonstrate what I had learned",
+        "Q5.0_2": "Assessment tasks increased my understanding of core concepts",
+        "Q5.0_3": "Assessment tasks were applicable to my current workplace",
+        "Q5.0_4": "Assessment tasks were applicable to my future intended workplace",
+        "Q5.0_5": "Assessment tasks had grading criteria that I could easily understand",
+    },
+}
+QUESTION_GROUPS = {
+    "course_experience": ("Q1", "To what extent do you agree or disagree with the following statements made about the Melbourne MicroCert?"),
+    "learning_experience": ("Q3", "Thinking about your learning experience, to what extent do you agree or disagree with the following statements about the Melbourne MicroCert?"),
+    "impact": ("Q4", "Thinking about the impact of your learning, to what extent do you agree or disagree with the following statements about the Melbourne MicroCert?"),
+    "assessment": ("Q5", "To what extent do you agree or disagree with the following statements about Melbourne MicroCert assessment tasks?"),
 }
 TEXT = {"Q2.1": "recommendation_reason", "Q2.2": "recommendation_reason", "Q2.3": "recommendation_reason",
         "Q6.0": "application", "Q7.0": "best_aspects", "Q8.0": "improvements"}

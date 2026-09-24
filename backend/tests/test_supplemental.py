@@ -36,25 +36,29 @@ def add_survey(session, offering):
 def test_survey_frontend_themes_nps_and_redacted_comments(dashboard):
     client, session, offering = dashboard
     add_survey(session, offering)
-    for endpoint in ('overview', 'assignments', 'outcomes'):
+    for endpoint in ('overview', 'outcomes'):
         response = client.get('/api/v1/' + endpoint, headers=HEADERS)
         assert response.status_code == 200
         assert 'private-person' not in response.text and 'private-response' not in response.text
         page = response.json()
         assert page['metrics']['survey_completed_responses']['value'] == 20
         assert all(r['metrics']['mean_agreement']['value'] == 4 for r in page['tables']['survey_themes'])
-        if endpoint == 'assignments':
-            assert {r['dimensions']['theme'] for r in page['tables']['survey_themes']} == {'assessment'}
-        else:
-            assert page['tables']['survey_nps'][0]['metrics']['nps']['value'] == 50
+        assert page['tables']['survey_nps'][0]['metrics']['nps']['value'] == 50
         if endpoint == 'outcomes':
             comments = page['tables']['survey_feedback_comments']
             assert comments and '[email removed] useful resources' in comments[0]['label']
+            counts = {row['dimensions']['question_group']: row['metrics']['responses']['value']
+                      for row in page['tables']['survey_feedback_response_counts']}
+            assert counts == {'application': 0, 'best_aspects': 0, 'improvements': 0,
+                              'recommendation_reason': 20}
+            assert {row['dimensions']['question_group'] for row in page['tables']['survey_questions']} == {
+                'Q1', 'Q3', 'Q4', 'Q5'}
             assert any('Anonymous feedback comments' in note for note in page['notes'])
         else:
             assert 'survey_feedback_comments' not in page['tables']
             assert not any('Anonymous feedback comments' in note for note in page['notes'])
     assert 'survey_feedback_comments' not in client.get('/api/v1/engagement', headers=HEADERS).json()['tables']
+    assert 'survey_feedback_comments' not in client.get('/api/v1/assignments', headers=HEADERS).json()['tables']
     # Aggregate NPS remains visible; response identities and text remain private.
     row = session.scalar(select(SurveyResponse))
     row.nps = 0
@@ -72,7 +76,7 @@ def test_theme_scores_weight_respondents_equally(dashboard):
         row.answers = dict(row.answers, Q5_ignored=1)
         row.answers = {k: v for k, v in row.answers.items() if k not in ('Q5.0_4', 'Q5.0_5')}
     session.commit()
-    page = client.get('/api/v1/assignments', headers=HEADERS).json()
+    page = client.get('/api/v1/outcomes', headers=HEADERS).json()
     assert page['tables']['survey_themes'][0]['metrics']['mean_agreement']['value'] == 4
 
 
@@ -182,17 +186,17 @@ def test_assignment_cumulative_curve_keeps_non_submitters(dashboard):
     ids = list(session.scalars(select(Assignment.id).where(Assignment.source_key.in_(['AT1', 'AT2']))))
     for aid in ids:
         for i, row in enumerate(session.scalars(select(AssignmentSubmission).where(AssignmentSubmission.assignment_id == aid))):
-            row.source_fields = dict(row.source_fields, due_at='2025-03-10T00:00:00Z')
+            row.source_fields = dict(row.source_fields, created_at='2025-03-01T00:00:00Z',
+                                     due_at='2025-03-10T00:00:00Z')
             row.submitted_at = datetime(2025, 3, 9, 12) if i < 10 else None
             row.graded_at = datetime(2025, 3, 11, 12) if i < 10 else None
     session.commit()
     page = client.get('/api/v1/assignments', headers=HEADERS,
         params={'offering': offering.offering_code, 'assignments': 'AT1,AT2'}).json()
-    curve = [r for r in page['tables']['assignment_cumulative_submission'] if r['dimensions']['days_relative_to_deadline'] == '0']
-    assert all(r['metrics']['submitted_pct']['value'] == 50 for r in curve)
-    assert page['tables']['assignment_time_summary'][0]['metrics']['median_grading_days']['value'] == 2
-    for name in ('assignment_deadline_coverage', 'assignment_submission_timing', 'assignment_time_summary'):
-        assert {r['dimensions']['assignment_name'] for r in page['tables'][name]} == {'AT1', 'AT2'}
+    curve = [r for r in page['tables']['assignment_cumulative_submission']
+             if r['dimensions']['days_from_creation'] == '8']
+    assert len(curve) == 2 and all(r['metrics']['submitted_pct']['value'] == 50 for r in curve)
+    assert {r['dimensions']['assignment_name'] for r in page['tables']['assignment_schedule']} == {'AT1', 'AT2'}
     pairs = {r['key']: r['metrics']['students']['value'] for r in page['tables']['assignment_pair_submission']}
     assert pairs == {'both_submitted': 10, 'first_only': 0, 'second_only': 0, 'neither_submitted': 10}
 

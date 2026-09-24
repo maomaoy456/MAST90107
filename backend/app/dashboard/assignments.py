@@ -1,12 +1,10 @@
 """Per-assignment statistics; weighted components require reviewed mappings."""
 from collections import defaultdict
-from statistics import mean
 from decimal import Decimal
 from fastapi import HTTPException
 from app.dashboard.contracts import TableRow
 from app.dashboard.privacy import metric, partition
 from app.dashboard.activity import group_guard
-import math
 import re
 
 
@@ -62,30 +60,16 @@ def assignment_options(data, filters):
             for a in available_assignments(data, scope, filters.mode)]
 
 
-def late_seconds(row):
-    value = (row.source_fields or {}).get("seconds_late")
-    # A zero in a non-late row is not a measured late duration.
-    if row.late is not True or not isinstance(value, (float, int)) or isinstance(value, bool):
-        return None
-    return float(value) if math.isfinite(value) and value >= 0 else None
-
-
 def distributions(rows, pass_threshold=70):
-    groups = {name: defaultdict(set) for name in ("submission_status", "missing_flag", "late_flag", "attempt_distribution", "late_duration", "score_distribution", "assessment_pass_status", "self_assessment_completion")}
+    groups = {name: defaultdict(set) for name in (
+        "submission_status", "attempt_distribution", "assessment_pass_status",
+        "self_assessment_completion")}
     for row in rows:
         student = row.student_id
         groups["submission_status"][row.status].add(student)
-        for field in ("missing", "late"):
-            flag = getattr(row, field)
-            groups[field + "_flag"]["unknown" if flag is None else "yes" if flag else "no"].add(student)
         attempt = "unknown" if row.attempt is None else str(row.attempt) if row.attempt <= 2 else "3_plus"
         groups["attempt_distribution"][attempt].add(student)
-        seconds = late_seconds(row)
-        duration = "not_late" if row.late is False else "unknown" if seconds is None else "0_24h" if seconds <= 86400 else "1_7d" if seconds <= 604800 else "over_7d"
-        groups["late_duration"][duration].add(student)
         score = percentage(row)
-        band = "unknown" if score is None else "below_70" if score < 70 else "70_to_below_80" if score < 80 else "80_and_above"
-        groups["score_distribution"][band].add(student)
         result = "result_unavailable" if score is None else "passed" if score >= pass_threshold else "below_pass_mark"
         groups["assessment_pass_status"][result].add(student)
         if (row.source_fields or {}).get("points_possible") == 0:
@@ -107,8 +91,7 @@ def build_assignments(page, data, scope, reason):
     # Selection changes only which complete assignment summaries are returned.
     blocked = group_guard([{r.student_id for r in group} for group in all_groups.values()], population, reason)
     rows = [r for r in selected_submissions(data, scope, page.filters.mode) if data.assignments[r.assignment_id].source_key in refs]
-    students = {r.student_id for r in rows}
-    page.metrics = {"students": metric(len(students), students, blocked)}
+    page.metrics = {"students": metric(len(population), population, blocked)}
     page.tables["assessments"] = []
     for a in options:
         if a.source_key not in refs:
@@ -117,18 +100,13 @@ def build_assignments(page, data, scope, reason):
         members = {r.student_id for r in group}
         graded = {r.student_id for r in group if percentage(r) is not None}
         submitted = {r.student_id for r in group if r.status in {"graded", "submitted"}}
-        late = {r.student_id for r in group if r.late is True}
-        measured_late = {r.student_id for r in group if late_seconds(r) is not None}
         base_gate = data.privacy_reason({a.offering_id})
         score_gate = base_gate
-        late_gate = group_guard([late, measured_late], members, base_gate)
-        values = [percentage(r) for r in group if percentage(r) is not None]
         rule = data.rule(data.offerings[a.offering_id])
         threshold = float(rule.pass_threshold) if rule else 70.0
         passed = {r.student_id for r in group if percentage(r) is not None and percentage(r) >= threshold}
         below = graded - passed
         unavailable = members - graded
-        durations = [late_seconds(r) / 3600 for r in group if late_seconds(r) is not None]
         dims = {"offering": data.offerings[a.offering_id].offering_code or "unlabelled", "assignment_ref": a.source_key,
                 "assessment_key": a.assessment_key if a.mapping_status == "confirmed" else "unconfirmed",
                 "kind": "self_assessment" if a.max_score == 0 else "scored"}
@@ -137,13 +115,9 @@ def build_assignments(page, data, scope, reason):
             "students": metric(len(members), members, base_gate), "submitted_students": metric(len(submitted), submitted, score_gate),
             "submission_rate_pct": metric(100 * len(submitted) / len(members) if members else None, members, score_gate),
             "graded_students": metric(len(graded), graded, score_gate),
-            "mean_score_pct": metric(mean(values) if values else None, graded, score_gate),
             "passed_students": metric(len(passed), passed, score_gate),
             "below_pass_mark_students": metric(len(below), below, score_gate),
-            "result_unavailable_students": metric(len(unavailable), unavailable, score_gate),
-            "pass_rate_pct": metric(100 * len(passed) / len(graded) if graded else None, graded, score_gate),
-            "late_students": metric(len(late), late, late_gate),
-            "mean_late_hours": metric(mean(durations) if durations else None, measured_late, late_gate)}))
+            "result_unavailable_students": metric(len(unavailable), unavailable, score_gate)}))
         for name, bins in distributions(group, threshold).items():
             for row in partition([(k, k, v) for k, v in sorted(bins.items())], reason=base_gate):
                 row.dimensions = dims | {"band": row.key}
@@ -153,7 +127,7 @@ def build_assignments(page, data, scope, reason):
         "Each comparison row represents one offering and one assignment; scores use only available valid graded submissions.",
         "Weighted course summaries use both complete valid components and the effective confirmed rule; assignment selection does not change their course-wide scope.",
         "Latest exported attempt per student/assignment; null attempts remain unknown, not one. Distributions do not reconstruct attempt history.",
-        "Missing, late and submission status are independent. Late duration uses supplied seconds_late only for rows flagged late.",
+        "Submission status and result availability are independent. Missing attempt values remain unknown.",
         "Self-assessment completion means a submitted/graded record, not a passing score. Denominators are observed assignment students, not an enrolment roster."]
 
 

@@ -19,7 +19,7 @@ def test_first_view_activity_totals_and_local_date(dashboard):
     assert 'activity_by_midpoint' not in page['tables']
     assert start['dimensions']['period'] == '2025-03-01'
     assert start['metrics']['views']['value'] == 1200
-    assert start['metrics']['participations']['value'] == 20
+    assert 'participations' not in start['metrics'] and 'participations' not in page['metrics']
     month = client.get('/api/v1/engagement?interval=month', headers=HEADERS).json()
     assert month['tables']['activity_by_start_date'][0]['dimensions']['period'] == '2025-03'
 
@@ -36,7 +36,7 @@ def test_unknown_view_dates_and_small_temporal_groups_are_visible(dashboard):
         assert any(r['dimensions']['period'] == 'unknown' for r in page['tables']['activity_by_start_date'])
 
 
-def test_business_pass_other_breakdown_and_course_start_timing(dashboard):
+def test_business_pass_other_breakdown_and_assignment_creation_timing(dashboard):
     client, session, offering = dashboard
     offering.starts_on = date(2025, 3, 1)
     event = session.scalar(select(EngagementEvent))
@@ -47,20 +47,22 @@ def test_business_pass_other_breakdown_and_course_start_timing(dashboard):
     for index, row in enumerate(rows):
         row.score = 80 if index < 5 else 60
         row.submitted_at = datetime(2025, 3, 11, 0)
+        row.source_fields = dict(row.source_fields, created_at='2025-03-01T00:00:00Z',
+                                 due_at='2025-03-20T00:00:00Z')
     session.commit()
     engagement = client.get('/api/v1/engagement', headers=HEADERS).json()
     assert any(row['dimensions']['resource_type'] == 'external_tools' for row in engagement['tables']['other_resource_types'])
     assignment = client.get('/api/v1/assignments', params={'assignments': 'AT1'}, headers=HEADERS).json()
     assessment = assignment['tables']['assessments'][0]['metrics']
     assert assessment['passed_students']['value'] == 5
-    assert assessment['pass_rate_pct']['value'] == 25
     status = {row['dimensions']['band']: row['metrics']['students']['value'] for row in assignment['tables']['assessment_pass_status']}
     assert status == {'below_pass_mark': 15, 'passed': 5}
-    timing = assignment['tables']['assignment_submission_time'][0]['metrics']
-    assert timing['median_days_from_course_start']['value'] == 10
+    curve = assignment['tables']['assignment_cumulative_submission']
+    day_ten = next(row for row in curve if row['dimensions']['days_from_creation'] == '10')
+    assert day_ten['metrics']['submitted_pct']['value'] == 100
 
 
-def test_assignment_selection_preserves_names_null_attempts_and_lateness(dashboard):
+def test_assignment_selection_preserves_names_and_null_attempts(dashboard):
     client, session, offering = dashboard
     item = session.scalar(select(Assignment).where(Assignment.source_key == 'AT1'))
     item.name = 'Assignment 1'
@@ -78,8 +80,8 @@ def test_assignment_selection_preserves_names_null_attempts_and_lateness(dashboa
     item = page['tables']['assessments'][0]
     assert item['label'] == 'Assignment 1'
     assert item['dimensions']['offering'] == offering.offering_code
-    assert item['metrics']['mean_late_hours']['value'] == 2
-    assert item['metrics']['mean_score_pct']['value'] == 47.5
+    assert 'mean_score_pct' not in item['metrics'] and 'pass_rate_pct' not in item['metrics']
+    assert 'late_students' not in item['metrics'] and 'late_flag' not in page['tables']
     assert {r['dimensions']['band']: r['metrics']['students']['value'] for r in page['tables']['attempt_distribution']} == {'2': 10, 'unknown': 10}
     self_page = client.get('/api/v1/assignments?mode=self_assessment', headers=HEADERS).json()
     assert self_page['tables']['self_assessment_completion'][0]['metrics']['students']['value'] == 20
@@ -125,7 +127,7 @@ def add_badges(session, offering):
     return batch, badge, students
 
 
-def test_badge_revoked_deduplication_rate_and_issue_dates(dashboard):
+def test_badge_revoked_deduplication_uses_assignment_population(dashboard):
     client, session, offering = dashboard
     batch, badge, students = add_badges(session, offering)
     # Duplicate valid award and revoked history must not change unique holder count.
@@ -135,14 +137,13 @@ def test_badge_revoked_deduplication_rate_and_issue_dates(dashboard):
         session.add(BadgeAward(batch_id=batch.id, badge_class_id=badge.id, student_id=student.id,
             source_row=50 + i, revoked=False, awarded_at=datetime(2025, 3, 1, 14)))
     session.commit()
-    page = client.get('/api/v1/outcomes', headers=HEADERS).json()
-    assert page['metrics']['valid_award_holders']['value'] == 10
-    assert page['metrics']['revoked_only_holders']['value'] == 10
-    assert page['metrics']['badge_completion_rate_pct']['value'] == 50
-    assert {r['dimensions']['period'] for r in page['tables']['award_timeline']} == {'2025-03-02'}
+    page = client.get('/api/v1/assignments', headers=HEADERS).json()
+    assert page['metrics']['active_badge_students']['value'] == 10
+    assert page['metrics']['revoked_badge_only_students']['value'] == 10
+    assert 'award_timeline' not in page['tables']
 
 
-def test_badge_ambiguity_cannot_be_resolved_by_filtering(dashboard):
+def test_engagement_in_another_offering_does_not_change_badge_assignment_match(dashboard):
     client, session, offering = dashboard
     add_badges(session, offering)
     other = CourseOffering(course_id=offering.course_id, source_key='second', offering_code='0AUTI0001_2026_MAR_PAR_1')
@@ -152,11 +153,10 @@ def test_badge_ambiguity_cannot_be_resolved_by_filtering(dashboard):
         session.add(EngagementEvent(batch_id=event.batch_id, student_id=event.student_id, offering_id=other.id,
             source_row=100 + i, event_type='page', times_viewed=10))
     session.commit()
-    page = client.get('/api/v1/outcomes', params={'offering': offering.offering_code}, headers=HEADERS).json()
-    assert page['metrics']['valid_award_holders']['value'] == 0
-    states = {r['key']: r['metrics']['memberships']['value'] for r in page['tables']['badge_status']}
-    assert states['needs_review'] == 20
-    assert all(r['key'].startswith('multiple_offerings') for r in page['tables']['award_diagnostics'] if r['metrics']['records']['value'])
+    page = client.get('/api/v1/assignments', params={'offering': offering.offering_code}, headers=HEADERS).json()
+    assert page['metrics']['active_badge_students']['value'] == 10
+    states = {r['key']: r['metrics']['students']['value'] for r in page['tables']['badge_status']}
+    assert states['needs_review'] == 0
 
 
 def test_register_new_course_is_idempotent_and_rejects_name_conflict(session):
@@ -170,7 +170,7 @@ def test_register_new_course_is_idempotent_and_rejects_name_conflict(session):
         register(session, 'bad code', 'New course')
 
 
-def test_small_late_group_and_assignment_scores_are_visible(dashboard):
+def test_late_fields_are_not_published_on_assignment_page(dashboard):
     client, session, _ = dashboard
     rows = list(session.scalars(select(AssignmentSubmission).where(AssignmentSubmission.assignment_id ==
         session.scalar(select(Assignment.id).where(Assignment.source_key == 'AT1')))))
@@ -180,19 +180,17 @@ def test_small_late_group_and_assignment_scores_are_visible(dashboard):
     session.commit()
     page = client.get('/api/v1/assignments?assignments=AT1', headers=HEADERS).json()
     metrics = page['tables']['assessments'][0]['metrics']
-    assert metrics['mean_score_pct']['value'] == 47.5
-    assert metrics['late_students']['value'] == 1 and metrics['mean_late_hours']['value'] == 1
-    assert all(not r['metrics']['students']['suppressed'] for r in page['tables']['late_flag'])
+    assert 'mean_score_pct' not in metrics and 'pass_rate_pct' not in metrics
+    assert 'late_students' not in metrics and 'mean_late_hours' not in metrics
+    assert 'late_flag' not in page['tables']
 
 
-def test_badge_missing_identity_is_course_diagnostic_not_cohort_member(dashboard):
+def test_badge_missing_identity_does_not_change_assignment_population(dashboard):
     client, session, offering = dashboard
     batch, badge, _ = add_badges(session, offering)
     for i in range(5):
         session.add(BadgeAward(batch_id=batch.id, badge_class_id=badge.id, student_id=None, source_row=100+i, revoked=False))
     session.commit()
-    page = client.get('/api/v1/outcomes', params={'offering': offering.offering_code}, headers=HEADERS).json()
-    assert page['metrics']['cohort_memberships']['value'] == 20
-    diagnostic = next(r for r in page['tables']['award_diagnostics'] if r['key'].startswith('missing_identity'))
-    assert diagnostic['metrics']['records']['value'] == 5
-    assert diagnostic['dimensions']['scope'] == 'selected_courses_all_offerings'
+    page = client.get('/api/v1/assignments', params={'offering': offering.offering_code}, headers=HEADERS).json()
+    assert page['metrics']['badge_population_students']['value'] == 20
+    assert 'award_diagnostics' not in page['tables']

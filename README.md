@@ -1,6 +1,6 @@
-# MPE Course Analytics
+# MPE Course Platform
 
-An English-language course analytics dashboard for course managers and project researchers. It compares course offerings, Engagement, Assignments, academic results, Badge outcomes, Qualtrics feedback and Salesforce support cases. Student identifiers and row-level student records never leave the backend.
+An English-language course platform for course managers and project researchers. It compares teaching periods, Canvas engagement, assignment completion, confirmed course pass, Badge evidence, Qualtrics feedback and verified Salesforce support cases. Student identifiers and row-level student records never leave the backend.
 
 The project has two ways to view the same six pages:
 
@@ -148,24 +148,24 @@ The export is read-only: it does not modify the database or train models. Survey
 
 | Page | Main content |
 | --- | --- |
-| Overview | Teaching periods, student availability across source systems, confirmed course pass, Survey feedback and verified course support demand |
-| Engagement | Canvas resource mix, activity grouped by first access date, teaching-week/stage views, expandable Other Canvas areas and verified support operations |
-| Assignments | Submission status, attempts, elapsed time from course start to submission, per-assessment pass status, overall course pass and self-assessment completion |
-| Badge & Feedback | Active/revoked Badge evidence, recorded Badge rate, course-pass reconciliation, award timing, Survey summaries and cleaned anonymous comments |
+| Overview | Teaching periods, source availability, Canvas Assignment student totals, confirmed course pass, Qualtrics feedback and verified Salesforce support demand |
+| Engagement | Canvas resource mix, students and views by first access date, AT1/AT2 deadline markers, teaching-week/stage views, expandable Other Canvas areas and verified Salesforce support operations |
+| Assignments | AT1/AT2 submitted counts, attempts, cumulative submissions from a clearly labelled release proxy, per-assignment Pass/Fail status, confirmed course pass, self-assessment completion and Badge reconciliation |
+| Feedback | Qualtrics NPS with coloured percentage shares, Q1/Q3/Q4/Q5 response distributions with a legend in each group, open-question response volume, the leading classified feedback type in each area and folded cleaned anonymous comments |
 | Insights | Five question-led business reports with one main finding, one evidence chart, interpretation, confidence, limitations and folded supporting data; Models shows saved evaluation and internal retraining controls |
 | Data & Rules | Source quality and versioned assessment rules |
 
-Data availability and teaching-period dates appear only on Overview. Survey feedback is shown in Badge & Feedback → Survey rather than repeated on Assignments. All visible labels use teaching period, population included and Students consistently; source-specific technical names remain available in folded data where needed.
+Data availability and teaching-period dates appear only on Overview. Qualtrics feedback has its own page. Badge evidence follows confirmed course pass at the end of Assignments. Visible counts identify their unit, and source-specific technical fields remain in folded data where needed.
 
-Assignment charts answer four operational questions: who submitted, how many attempts were recorded, how long after course start submissions occurred, and whether the confirmed pass mark was reached. The frontend does not display raw scores, late flags, deadline coverage or deadline-relative charts. These source fields remain in MySQL and compatible API tables for audit and future analysis.
+Assignment charts answer four operational questions: who submitted, how many attempts were recorded, how submissions accumulated after the release proxy date, and whether the confirmed pass mark was reached. The frontend does not display raw scores or late flags. These source fields remain in MySQL for audit and future analysis.
 
-Submission timing is measured in elapsed calendar days from confirmed course start. It is not time spent actively working. The summary reports the median and middle 50% of observed submitted/graded records; records without a valid submission timestamp remain unavailable. Insights also compares the interval between a student's first Canvas activity and recorded submission.
+The Canvas export has no reliable assignment publication timestamp. Row-level `created_at` values vary by student and appear to describe assignment/submission record creation. The Assignment curve therefore uses the earliest recorded `created_at` per assignment as an explicit **release proxy**, shows the source deadline as a dashed reference, and never describes elapsed days as active working time. Insights separately compares first Canvas activity with recorded submission.
 
-Pass summaries show **Passed**, **Did not reach pass mark** and **Result unavailable**. Overall course pass requires valid AT1 and AT2 results and uses the effective versioned rule returned by the API. The confirmed current rule is AT1 40%, AT2 60% and a 70% pass mark. Result unavailable is never counted as a failure.
+Pass summaries show **Passed**, **Fail** and **Result unavailable**. Overall course pass requires valid AT1 and AT2 results and uses the effective versioned rule returned by the API. The confirmed current rule is AT1 40%, AT2 60% and a 70% pass mark. Result unavailable is never counted as a failure.
 
-Recorded Badge rate uses active, non-revoked Badge evidence divided by Students represented in the linked Canvas activity population. It is not manually forced to equal course pass. The reconciliation panel reports passed students without an active Badge record and Badge records without a confirmed pass so data collection or claiming differences stay visible.
+Badge evidence is matched by student identity to exactly one Assignment teaching period within the course. The Assignment population is the shared denominator for the reconciliation panel. Passed students without an active Badge record and Badge records without a confirmed pass remain visible; the values are not manually balanced. Revoked-only evidence is separate from academic failure.
 
-Survey valid-response counts are not interchangeable: a theme requires at least half its items answered in a completed questionnaire; each individual question counts its own valid answers. This is why a theme can have 10 valid responses while its item counts range from 9 to 11. No anonymous Survey-to-student or Survey-to-assignment-score join is implied.
+Survey valid-response counts are not interchangeable: a theme requires at least half its items answered in a completed questionnaire; each individual question counts its own valid answers. This is why a theme can have 10 valid responses while its item counts range from 9 to 11. Open-question response volume counts completed questionnaires containing text for that prompt area. Classified topic counts may overlap when one comment matches more than one auditable keyword rule. No anonymous Survey-to-student or Survey-to-assignment-score join is implied.
 
 ## API summary
 
@@ -178,7 +178,7 @@ Protected routes use `/api/v1` and require `X-API-Key`.
 | `GET /engagement` | Engagement and support page |
 | `GET /assignment-options` | Valid assignment references for the selected scope |
 | `GET /assignments` | Assignment page |
-| `GET /outcomes` | Badge, academic and Survey outcomes |
+| `GET /outcomes` | Qualtrics Feedback page |
 | `GET /insights` | Exploratory analysis |
 | `GET /models` | Saved model runs and metrics |
 | `POST /models/train` | Internal model retraining |
@@ -187,11 +187,11 @@ Protected routes use `/api/v1` and require `X-API-Key`.
 | `PUT /rules/{offering_code}` | Internal offering-rule update |
 | `GET /health` | Application and database status |
 
-Common filters are `course`, `offering`, or comma-separated `offerings`. Engagement and Outcomes accept `interval=day|week|month`. Assignments accepts `mode=combined|scored|self_assessment` and references returned by `/assignment-options`. Insights accepts `target=all|AT1|AT2|weighted_final|badge` and always pools compatible offerings within the selected course.
+Common filters are `course`, `offering`, or comma-separated `offerings`. Engagement accepts `interval=day|week|month`. Assignments accepts `mode=combined|scored|self_assessment` and references returned by `/assignment-options`. Insights accepts `target=all|AT1|AT2|weighted_final|badge` and always pools compatible offerings within the selected course.
 
-The Assignment API includes additive `assessment_pass_status`, `assignment_submission_time` and `assignment_submission_time_distribution` tables. Rows include readable `assignment_name` and confirmed `assessment_key` alongside the stable `assignment_ref`. Academic results expose the effective `calculation_rule` and `pass_threshold_pct`; frontends should use these rather than hard-code offering overrides. Deadline, missing and late source tables remain for compatibility but are not displayed in the current frontend.
+The Assignment API returns `assessment_pass_status`, `assignment_schedule`, `assignment_cumulative_submission`, `academic_results`, `badge_status`, `badge_course_reconciliation` and `badge_offering_comparison`. Rows include readable `assignment_name` and confirmed `assessment_key` alongside the stable `assignment_ref`. Academic results expose the effective `calculation_rule` and `pass_threshold_pct`; frontends should use these rather than hard-code offering overrides.
 
-Engagement includes `other_resource_types`, which expands the combined Other Canvas areas category into normalized resource types. Outcomes includes `badge_course_reconciliation`, which compares confirmed pass and active Badge evidence on the same linked population. Unverified support exports return `support_data_status` instead of publishing case totals or text summaries.
+Engagement includes `other_resource_types`, which expands the combined Other Canvas areas category, plus `assignment_deadlines` for timeline markers. Interactive-action counts are excluded from the Engagement page contract but remain available internally for Insights and modeling. Outcomes groups the original Qualtrics items under Q1, Q3, Q4 and Q5. It returns `survey_feedback_response_counts` for the number of completed responses containing text in each open-question area, `survey_feedback_topic_highlights` for each area's leading classified type, the top five classified topics per area and cleaned comments. Unverified support exports return `support_data_status` instead of publishing case totals or text summaries.
 
 Insights includes `submission_days_from_course_start` and `first_activity_to_submission_days`. Group comparisons expose the median, first quartile and third quartile as well as valid sample counts. Spearman correlation and its uncertainty interval remain in folded technical data; the main report translates them into plain-language direction and strength.
 
@@ -202,7 +202,7 @@ Insights includes `submission_days_from_course_start` and `first_activity_to_sub
 - Both courses have AT1 at 40% and AT2 at 60%, no final exam and a pass threshold of 70. Both valid component grades are required; missing work stays unknown.
 - Missing attempts stay null. Submission status, `missing`, `late` and `excused` remain independent. Zero-point self-assessments remain non-scored activities.
 - Badge and academic pass are independent. Revoked-only evidence is unsuccessful; a separate valid award remains valid.
-- Badge offering membership comes from unique student-to-Engagement matching within the course, rather than award dates.
+- Badge offering membership comes from unique student-to-Assignment matching within the course, rather than award dates.
 - Survey responses and Salesforce cases are not joined to students. `Age (Hours)` is Salesforce response time.
 - Insights pools compatible teaching periods within each course because the student sample is small. Its Exploration tab opens one of five questions at a time: Canvas activity and passing, learning activity mix, when students started and submitted, self-assessment and passing, or behaviours linked to recorded Badges. Each view follows the same report order: main finding, one evidence chart, what it may mean, confidence, data limitation and folded supporting figures.
 - The main Insights view describes ranked relationships as positive/negative and weak/moderate/strong. Spearman correlation describes association, not causation. The coefficient, uncertainty interval and within-teaching-period reference remain available in folded technical data. An interval crossing zero is reported as directionally uncertain.

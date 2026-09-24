@@ -78,9 +78,8 @@ def main():
             if options:
                 selected = check("/api/v1/assignments", params=params | {"assignments": options[0]["ref"]})
                 assert all(row["dimensions"]["assignment_ref"] == options[0]["ref"] for row in selected["tables"]["assessments"])
-            for page in ("engagement", "outcomes"):
-                for interval in ("week", "month"):
-                    check("/api/v1/" + page, params=params | {"interval": interval})
+            for interval in ("week", "month"):
+                check("/api/v1/engagement", params=params | {"interval": interval})
         if len(catalog["offerings"]) > 1:
             codes = ",".join(o["code"] for o in catalog["offerings"][:2])
             for page in catalog["pages"]:
@@ -90,16 +89,16 @@ def main():
             for offering in catalog["offerings"]:
                 result = check("/api/v1/" + page, params={"offering": offering["code"]})
                 assert result["page"] == page
-                if page in {"overview", "engagement", "assignments", "outcomes"}:
+                if page == "overview":
                     assert offering["code"] in result["coverage"]
                     calendar = result["tables"]["course_calendar"][0]["dimensions"]
                     assert calendar["starts_on"] == (offering["starts_on"] or "unknown")
                     assert calendar["ends_on"] == (offering["ends_on"] or "unknown")
-                    if page == "overview" and result["coverage"][offering["code"]]["survey"]:
+                    if result["coverage"][offering["code"]]["survey"]:
                         assert len(result["tables"]["survey_themes"]) == 4
                         assert result["tables"]["survey_questions"][0]["dimensions"]["question"] == "Q1_5"
-                    if page == "engagement" and result["coverage"][offering["code"]]["support"]:
-                        assert "support_summary" in result["tables"]
+                if page == "engagement" and result["metrics"]["support_records"]["value"] is not None:
+                    assert "support_summary" in result["tables"]
                 if page == "assignments":
                     for mode in ("scored", "self_assessment"):
                         check("/api/v1/assignments", params={"offering": offering["code"], "mode": mode})

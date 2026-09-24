@@ -66,12 +66,13 @@ def test_six_pages_and_catalog_contract(dashboard):
 
 def test_academic_tables_only_appear_on_relevant_pages(dashboard):
     client, _, _ = dashboard
-    for page_name in ("overview", "assignments", "outcomes"):
+    for page_name in ("overview", "assignments"):
         tables = client.get("/api/v1/" + page_name, headers=HEADERS).json()["tables"]
         assert {"academic_results", "weighted_grade_distribution"} <= tables.keys()
-    engagement = client.get("/api/v1/engagement", headers=HEADERS).json()["tables"]
-    assert "academic_results" not in engagement
-    assert "weighted_grade_distribution" not in engagement
+    for page_name in ("engagement", "outcomes"):
+        tables = client.get("/api/v1/" + page_name, headers=HEADERS).json()["tables"]
+        assert "academic_results" not in tables
+        assert "weighted_grade_distribution" not in tables
 
 
 @pytest.mark.parametrize("query", ["student_id=private-test-identity", "course=X&course=Y", "mode=bad", "date_from=2025-01-01", "course='OR1=1"])
@@ -112,7 +113,7 @@ def test_modes_and_explicit_weight_confirmation(dashboard):
         result = client.get("/api/v1/assignments", params=params | {"mode": mode}, headers=HEADERS)
         assert result.status_code == 200
         if mode == "self_assessment":
-            assert all(r["metrics"]["mean_score_pct"]["value"] is None for r in result.json()["tables"]["assessments"])
+            assert all(r["dimensions"]["kind"] == "self_assessment" for r in result.json()["tables"]["assessments"])
 
 
 def test_small_source_complement_remains_aggregate_and_visible(dashboard):
@@ -166,7 +167,7 @@ def test_database_failure_has_frontend_retry_status(dashboard):
     assert response.json() == {"detail": "database_unavailable"}
 
 
-def test_badges_resolve_from_engagement_without_course_dates(dashboard):
+def test_badges_resolve_from_assignment_membership_without_course_dates(dashboard):
     client, session, offering = dashboard
     from app.models import BadgeAward, BadgeClass, BadgeClassCourseMapping
     batch = ImportBatch(source="badge", file_sha256="c" * 64, importer_version="test", status="completed", finished_at=datetime(2025, 1, 1))
@@ -177,9 +178,8 @@ def test_badges_resolve_from_engagement_without_course_dates(dashboard):
         session.add(BadgeAward(batch_id=batch.id, source_row=i + 2, badge_class_id=badge_class.id,
             student_id=student.id, revoked=False, match_status="manual_review", outcome="unknown"))
     session.commit()
-    response = client.get("/api/v1/outcomes", params={"offering": offering.offering_code}, headers=HEADERS)
-    assert response.json()["metrics"]["valid_award_holders"]["value"] == 20
-    assert response.json()["metrics"]["badge_completion_rate_pct"]["value"] == 100
+    response = client.get("/api/v1/assignments", params={"offering": offering.offering_code}, headers=HEADERS)
+    assert response.json()["metrics"]["active_badge_students"]["value"] == 20
     reconciliation = {row["key"]: row["metrics"]["students"]["value"] for row in response.json()["tables"]["badge_course_reconciliation"]}
     assert reconciliation["passed_and_badge"] == 0
     assert reconciliation["badge_recorded_pass_not_confirmed"] == 20

@@ -35,7 +35,6 @@ def build_engagement(page, data, scope, reason):
     views = sum(r.times_viewed or 0 for r in rows)
     page.metrics = {"students": metric(len(students), students),
         "views": metric(views, students),
-        "participations": metric(sum(r.participated_count or 0 for r in rows), students),
         "views_per_student": metric(views / len(students) if students else None, students)}
     for name, groups in tables.items():
         page.tables[name] = []
@@ -44,16 +43,14 @@ def build_engagement(page, data, scope, reason):
             page.tables[name].append(TableRow(key=f"{period}:{kind}", label=f"{period} / {kind}",
                 dimensions={"period": period, "category": kind}, metrics={
                     "students": metric(len(members), members),
-                    "views": metric(sum(r.times_viewed or 0 for r in group), members),
-                    "participations": metric(sum(r.participated_count or 0 for r in group), members)}))
+                    "views": metric(sum(r.times_viewed or 0 for r in group), members)}))
     page.tables["other_resource_types"] = []
     for kind, group in sorted(other_types.items()):
         members = {r.student_id for r in group}
         page.tables["other_resource_types"].append(TableRow(key=kind, label=kind,
             dimensions={"resource_type": kind, "category": "other"}, metrics={
                 "students": metric(len(members), members),
-                "views": metric(sum(r.times_viewed or 0 for r in group), members),
-                "participations": metric(sum(r.participated_count or 0 for r in group), members)}))
+                "views": metric(sum(r.times_viewed or 0 for r in group), members)}))
     page.notes += ["Start-date activity assigns each resource summary's full count to start_date.",
         "First-view attribution is not a daily click log: each resource summary's total count is placed on its recorded first-view date.",
         "Unknown dates remain an unknown bucket. Weeks start Monday; missing calendar buckets are not asserted to be zero.",

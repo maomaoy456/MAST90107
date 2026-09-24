@@ -68,9 +68,9 @@ def collect_snapshot(settings: Settings) -> dict:
                 for page in ("overview", "data-rules"):
                     get(client, f"/v1/{page}", base)
                 get(client, "/v1/rules", base)
-                for page in ("engagement", "outcomes"):
-                    for interval in ("day", "week", "month"):
-                        get(client, f"/v1/{page}", {**base, "interval": interval})
+                for interval in ("day", "week", "month"):
+                    get(client, "/v1/engagement", {**base, "interval": interval})
+                get(client, "/v1/outcomes", base)
                 for mode in ("combined", "scored", "self_assessment"):
                     assignment_params = {**base, "mode": mode}
                     options = get(client, "/v1/assignment-options", assignment_params)

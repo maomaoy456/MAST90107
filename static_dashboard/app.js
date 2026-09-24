@@ -1,19 +1,18 @@
 "use strict";
 
-import { clearSpecialPage, renderSpecialPage } from "./page-visuals.js?v=20260922-1";
-import { renderInsightsPage } from "./insights-visuals.js?v=20260922-1";
+import { clearSpecialPage, renderSpecialPage } from "./page-visuals.js?v=20260924-3";
+import { renderInsightsPage } from "./insights-visuals.js?v=20260924-3";
 
-const state = { catalog: null, page: "overview", course: "", offering: "", assignments: new Set(), interval: "day", mode: "combined", supportTopic: "all", outcomesTab: "badge", insightsTab: "exploration", insightArea: "engagement_grade", explorationTarget: "AT1", modelTarget: "all" };
+const state = { catalog: null, page: "overview", course: "", offering: "", assignments: new Set(), interval: "day", mode: "scored", supportTopic: "all", insightsTab: "exploration", insightArea: "engagement_grade", explorationTarget: "AT1", modelTarget: "all" };
 const pageNames = {
   overview: "Overview", engagement: "Engagement", assignments: "Assignments",
-  outcomes: "Badge & Feedback", insights: "Insights", "data-rules": "Data & Rules"
+  outcomes: "Feedback", insights: "Insights", "data-rules": "Data & Rules"
 };
 if (location.hash.slice(1) in pageNames) state.page = location.hash.slice(1);
 const knownLabels = {
   students: "Students", offerings: "Offerings", courses: "Courses", records: "Records",
   macro_f1: "Macro F1", balanced_accuracy: "Balanced Accuracy",
-  engagement_students: "Engagement students", assignment_students: "Assignment students",
-  intersection_students: "Students linked across Canvas sources", badge_completion_rate_pct: "Recorded Badge rate (%)",
+  engagement_students: "Students with Canvas activity", assignment_students: "Total number of students",
   valid_award_holders: "Students with an active Badge", cohort_memberships: "Students represented",
   mean_score_pct: "Mean score (%)", submission_rate_pct: "Submission rate (%)",
 };
@@ -21,7 +20,7 @@ const cohortLabels = {
   source_specific: "Student groups from each available data source",
   all_engagement: "Students with Canvas activity in the selected teaching period",
   all_assignment: "Students with assignment records in the selected teaching period",
-  engagement_student_offering_memberships: "Students with Canvas activity, counted once per teaching period",
+  completed_qualtrics_responses: "Completed anonymous Qualtrics responses in the selected teaching period",
   course_separated_student_offering_records: "Linked student records pooled across teaching periods for this course",
   metadata_only: "Source and rule metadata for the selected scope"
 };
@@ -140,7 +139,7 @@ function currentParams(extra = {}) {
 }
 
 function filterMarkup() {
-  if (["engagement", "outcomes"].includes(state.page)) return `<label>Time interval<select id="interval"><option value="day">Day</option><option value="week">Week</option><option value="month">Month</option></select></label>`;
+  if (state.page === "engagement") return `<label>Time interval<select id="interval"><option value="day">Day</option><option value="week">Week</option><option value="month">Month</option></select></label>`;
   if (state.page === "assignments") return `<label>Assignment type<select id="mode"><option value="combined">All activities</option><option value="scored">Scored</option><option value="self_assessment">Self-assessment</option></select></label><fieldset class="assignment-picker"><legend>Assignments</legend><div id="assignmentChoices">Loading…</div></fieldset>`;
   return "";
 }
@@ -163,24 +162,13 @@ async function retrain(event) {
   finally { if (button.isConnected) { button.disabled = false; button.textContent = originalText; } }
 }
 
-function staticAssignmentGroups(options) {
-  if (!staticMode || state.offering) return options;
-  const groups = Object.groupBy ? Object.groupBy(options.filter(item => item.assessment_key), item => item.assessment_key)
-    : options.filter(item => item.assessment_key).reduce((all, item) => ((all[item.assessment_key] ||= []).push(item), all), {});
-  const grouped = Object.entries(groups).filter(([, items]) => items.length > 1).map(([key, items]) => ({
-    assessment_key: key, ref: items.map(item => item.ref).sort().join(","),
-    name: `${key} across all offerings`, offering: "All offerings", kind: items[0].kind
-  }));
-  return [...grouped, ...options];
-}
-
 async function loadAssignmentOptions() {
   const picker = el("assignmentChoices");
   if (!picker) return;
-  const options = staticAssignmentGroups(await api(`/v1/assignment-options?${currentParams({ mode: state.mode })}`));
+  const options = await api(`/v1/assignment-options?${currentParams({ mode: state.mode })}`);
   const valid = new Set(options.map(item => item.ref));
   state.assignments = new Set([...state.assignments].filter(ref => valid.has(ref)));
-  picker.innerHTML = options.length ? options.map(item => `<label><input type="checkbox" value="${escapeHtml(item.ref)}" ${state.assignments.has(item.ref) ? "checked" : ""}><span>${escapeHtml(item.name)} · ${escapeHtml(item.offering === "All offerings" ? item.offering : offeringLabel(item.offering))}</span></label>`).join("") : `<span class="unavailable">No assignments available</span>`;
+  picker.innerHTML = options.length ? options.map(item => `<label><input type="checkbox" value="${escapeHtml(item.ref)}" ${state.assignments.has(item.ref) ? "checked" : ""}><span>${escapeHtml(item.assessment_key || item.name)}</span></label>`).join("") : `<span class="unavailable">No assignments available</span>`;
   picker.querySelectorAll("input").forEach(input => input.onchange = () => {
     if (staticMode) state.assignments.clear();
     input.checked ? state.assignments.add(input.value) : state.assignments.delete(input.value);
@@ -202,7 +190,7 @@ async function loadPage() {
   el("pageFilters").innerHTML = filterMarkup();
   bindPageFilters();
   const extra = {};
-  if (["engagement", "outcomes"].includes(state.page)) extra.interval = state.interval;
+  if (state.page === "engagement") extra.interval = state.interval;
   if (state.page === "assignments") {
     extra.mode = state.mode;
     try { await loadAssignmentOptions(); } catch (error) { showMessage(error.message); }
@@ -246,10 +234,12 @@ async function renderRules() {
 
 function populateOfferings() {
   const options = state.catalog.offerings.filter(item => item.course === state.course)
-    .sort((a, b) => String(a.starts_on || "").localeCompare(String(b.starts_on || "")) || a.code.localeCompare(b.code));
-  el("offering").innerHTML = `<option value="">All offerings</option>${options.map(item =>
+    .sort((a, b) => String(b.starts_on || "").localeCompare(String(a.starts_on || "")) || a.code.localeCompare(b.code));
+  const assignmentPage = state.page === "assignments";
+  el("offering").innerHTML = `${assignmentPage ? "" : '<option value="">All teaching periods</option>'}${options.map(item =>
     `<option value="${escapeHtml(item.code)}">${escapeHtml(offeringLabel(item.code))} · ${escapeHtml(item.starts_on || "Date unknown")}</option>`).join("")}`;
-  if (!options.some(item => item.code === state.offering)) state.offering = "";
+  if (!options.some(item => item.code === state.offering)) state.offering = assignmentPage ? options[0]?.code || "" : "";
+  if (assignmentPage && !state.offering) state.offering = options[0]?.code || "";
   el("offering").value = state.offering;
 }
 
@@ -275,7 +265,9 @@ async function start() {
     el("offering").onchange = event => { state.offering = event.target.value; state.assignments.clear(); loadPage(); };
     document.querySelectorAll("nav button").forEach(button => button.onclick = () => {
       document.querySelector("nav button.active")?.classList.remove("active");
-      button.classList.add("active"); state.page = button.dataset.page; location.hash = state.page; syncOfferingControl(); loadPage();
+      button.classList.add("active"); state.page = button.dataset.page; location.hash = state.page;
+      if (state.page === "outcomes") state.offering = "";
+      populateOfferings(); syncOfferingControl(); loadPage();
     });
     el("connection").textContent = staticMode
       ? `Static snapshot · ${staticSnapshot.meta?.generated_at?.slice(0, 10) || "date unavailable"}`

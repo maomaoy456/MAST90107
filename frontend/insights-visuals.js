@@ -127,7 +127,7 @@ function formatProfile(metric, number) {
 
 function groupLabel(row) {
   const group=String(row.dimensions.group);
-  if(row.dimensions.grouping==="passed") return group==="1"?"Passed":group==="0"?"Did not reach pass mark":"Result unavailable";
+  if(row.dimensions.grouping==="passed") return group==="1"?"Passed":group==="0"?"Fail":"Result unavailable";
   return human(group);
 }
 
