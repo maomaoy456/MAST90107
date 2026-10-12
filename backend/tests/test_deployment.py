@@ -47,7 +47,7 @@ def test_frozen_migration_schema_and_downgrade():
             context = MigrationContext.configure(connection)
             migration.op = Operations(context)
             migration.upgrade()
-            assert set(inspect(connection).get_table_names()) == set(Base.metadata.tables) - {"survey_responses", "support_cases", "offering_calendars"}
+            assert set(inspect(connection).get_table_names()) == set(Base.metadata.tables) - {"survey_responses", "support_cases", "offering_calendars", "insight_notes"}
             # Initial migration is frozen; current-schema drift is checked on live MySQL.
             migration.downgrade()
             assert inspect(connection).get_table_names() == []

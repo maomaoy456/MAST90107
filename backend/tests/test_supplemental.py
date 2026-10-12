@@ -29,7 +29,8 @@ def add_survey(session, offering):
         answers = {q: 5 if i < 10 else 3 for theme in THEMES.values() for q in theme}
         session.add(SurveyResponse(batch_id=batch.id, offering_id=offering.id, response_digest=f'private-response-{i}',
             finished=True, nps=9 if i < 10 else 7, answers=answers,
-            feedback={'Q2.3': 'private-person@example.org useful resources'}, source_fields={}))
+            feedback={'Q2.3': 'private-person@example.org useful resources workplace application' if i == 0
+                      else 'private-person@example.org useful resources'}, source_fields={}))
     session.commit()
 
 
@@ -53,6 +54,13 @@ def test_survey_frontend_themes_nps_and_redacted_comments(dashboard):
                               'recommendation_reason': 20}
             assert {row['dimensions']['question_group'] for row in page['tables']['survey_questions']} == {
                 'Q1', 'Q3', 'Q4', 'Q5'}
+            question_codes = {row['dimensions']['question'] for row in page['tables']['survey_questions']}
+            assert 'Q3_1' in question_codes and not any('.0_' in code for code in question_codes)
+            highlight = next(row for row in page['tables']['survey_feedback_topic_highlights']
+                             if row['dimensions']['question_group'] == 'recommendation_reason')
+            assert highlight['metrics']['answered_responses']['value'] == 20
+            assert highlight['metrics']['classified_responses']['value'] == 20
+            assert highlight['metrics']['classification_matches']['value'] == 21
             assert any('Anonymous feedback comments' in note for note in page['notes'])
         else:
             assert 'survey_feedback_comments' not in page['tables']
@@ -183,18 +191,19 @@ def test_scoped_survey_import_rejects_duplicates_and_preserves_partial(dashboard
 
 def test_assignment_cumulative_curve_keeps_non_submitters(dashboard):
     client, session, offering = dashboard
-    ids = list(session.scalars(select(Assignment.id).where(Assignment.source_key.in_(['AT1', 'AT2']))))
-    for aid in ids:
-        for i, row in enumerate(session.scalars(select(AssignmentSubmission).where(AssignmentSubmission.assignment_id == aid))):
+    assignments = list(session.scalars(select(Assignment).where(Assignment.source_key.in_(['AT1', 'AT2']))))
+    for assignment in assignments:
+        assignment.assessment_key, assignment.mapping_status = assignment.source_key, 'confirmed'
+        for i, row in enumerate(session.scalars(select(AssignmentSubmission).where(AssignmentSubmission.assignment_id == assignment.id))):
             row.source_fields = dict(row.source_fields, created_at='2025-03-01T00:00:00Z',
                                      due_at='2025-03-10T00:00:00Z')
             row.submitted_at = datetime(2025, 3, 9, 12) if i < 10 else None
             row.graded_at = datetime(2025, 3, 11, 12) if i < 10 else None
     session.commit()
     page = client.get('/api/v1/assignments', headers=HEADERS,
-        params={'offering': offering.offering_code, 'assignments': 'AT1,AT2'}).json()
+        params={'offering': offering.offering_code, 'mode': 'scored'}).json()
     curve = [r for r in page['tables']['assignment_cumulative_submission']
-             if r['dimensions']['days_from_creation'] == '8']
+             if r['dimensions']['days_from_deadline'] == '-1']
     assert len(curve) == 2 and all(r['metrics']['submitted_pct']['value'] == 50 for r in curve)
     assert {r['dimensions']['assignment_name'] for r in page['tables']['assignment_schedule']} == {'AT1', 'AT2'}
     pairs = {r['key']: r['metrics']['students']['value'] for r in page['tables']['assignment_pair_submission']}

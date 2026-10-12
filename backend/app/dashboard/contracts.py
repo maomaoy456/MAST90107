@@ -8,7 +8,7 @@ class StrictModel(BaseModel):
 
 
 class Filters(StrictModel):
-    target: Literal["all", "AT1", "AT2", "weighted_final", "badge"] = "all"
+    target: Literal["all", "pass", "badge"] = "all"
     course: str | None = Field(default=None, pattern=r"^[A-Z0-9_]{1,120}$")
     offering: str | None = Field(default=None, pattern=r"^[A-Z0-9_]{1,120}$")
     mode: Literal["combined", "scored", "self_assessment"] = "combined"
@@ -135,7 +135,7 @@ class RuleSaved(StrictModel):
 
 class ModelTrainRequest(StrictModel):
     course: str = Field(pattern=r"^[A-Z0-9_]{1,32}$")
-    target: Literal["AT1", "AT2", "weighted_final", "badge"]
+    target: Literal["pass", "badge"]
 
 
 class ModelCandidate(StrictModel):
@@ -165,3 +165,18 @@ class ModelRunView(StrictModel):
 
 class ModelRunList(StrictModel):
     runs: list[ModelRunView]
+
+
+class InsightNoteInput(StrictModel):
+    course: str = Field(pattern=r"^[A-Z0-9_]{1,32}$")
+    offering: str = Field(default="", pattern=r"^[A-Z0-9_]{0,120}$")
+    chart_key: str = Field(pattern=r"^[a-z][a-z0-9_.-]{0,159}$")
+    note: str = Field(max_length=2000)
+
+
+class InsightNoteView(StrictModel):
+    course: str
+    offering: str
+    chart_key: str
+    note: str
+    updated_at: str | None = None

@@ -30,7 +30,8 @@ def test_offline_html_embeds_assets(tmp_path, monkeypatch):
     frontend.mkdir()
     (frontend / "index.html").write_text('<link rel="stylesheet" href="styles.css?v=1"><script type="module" src="app.js?v=1"></script>')
     (frontend / "styles.css").write_text("body{}")
-    (frontend / "page-visuals.js").write_text("export function a(){}")
+    (frontend / "page-visuals.js").write_text('import {c} from "./nested.js?v=1"; export function a(){}')
+    (frontend / "nested.js").write_text("export const c=1;")
     (frontend / "insights-visuals.js").write_text("export function b(){}")
     (frontend / "app.js").write_text('import {a} from "./page-visuals.js?v=1"; import {b} from "./insights-visuals.js?v=1";')
     monkeypatch.setattr(static_export, "FRONTEND", frontend)
@@ -40,3 +41,7 @@ def test_offline_html_embeds_assets(tmp_path, monkeypatch):
     assert "window.__MPE_STATIC_SNAPSHOT__" in rendered
     assert "data:text/javascript;base64" in rendered
     assert 'src="app.js' not in rendered and 'href="styles.css' not in rendered
+    assert 'id="dashboardSnapshot"' in rendered
+    import base64, re
+    bundled = re.findall(r'data:text/javascript;base64,([A-Za-z0-9+/=]+)', rendered)
+    assert all('"./nested.js' not in base64.b64decode(item).decode() for item in bundled)

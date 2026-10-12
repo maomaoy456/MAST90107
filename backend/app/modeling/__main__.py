@@ -8,12 +8,12 @@ from app.modeling.training import train
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--course", required=True)
-    parser.add_argument("--target", choices=["AT1", "AT2", "weighted_final", "badge", "all"], default="all")
+    parser.add_argument("--target", choices=["pass", "badge", "all"], default="all")
     args = parser.parse_args()
     settings = Settings()
     engine = build_engine(settings)
     try:
-        targets = ("AT1", "AT2", "weighted_final", "badge") if args.target == "all" else (args.target,)
+        targets = ("pass", "badge") if args.target == "all" else (args.target,)
         with session_factory(engine)() as session:
             for target in targets:
                 try:

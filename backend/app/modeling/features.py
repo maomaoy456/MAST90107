@@ -1,4 +1,4 @@
-"""Leakage-aware feature snapshots for the four reviewed prediction targets."""
+"""Leakage-aware feature snapshots for course pass and recorded Badge targets."""
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, time, timezone
@@ -8,14 +8,14 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from app.dashboard.academic import academic_records, score_band
+from app.dashboard.academic import academic_records
 from app.dashboard.assignment_time import deadline
-from app.dashboard.assignments import exact_percentage, selected_submissions
+from app.dashboard.assignments import selected_submissions
 from app.dashboard.badges import resolve_awards
 from app.dashboard.engagement import category
 
 MELBOURNE = ZoneInfo("Australia/Melbourne")
-GRADE_LABELS = ("below_70", "70_to_below_80", "80_and_above")
+PASS_LABELS = ("not_passed", "passed")
 BADGE_LABELS = ("no_valid_badge", "valid_badge")
 BASE_FEATURES = (
     "safe_views", "safe_participations", "resources_touched", "content_resources_touched",
@@ -83,20 +83,6 @@ def submitted_by(row, cutoff):
     return 0 if due is not None and due <= cutoff and row.status in {"unsubmitted", "missing"} else None
 
 
-def assignment_features(academic, cutoff, include_score, keys):
-    values = {}
-    for key in keys:
-        row = academic["rows"].get(key) if academic else None
-        submitted = submitted_by(row, cutoff)
-        due = deadline(row) if row else None
-        values[key + "_submitted"] = submitted
-        values[key + "_late"] = int(row.submitted_at > due) if submitted and due and row.submitted_at else None
-        if include_score and key == "AT1":
-            score = exact_percentage(row) if row and row.graded_at and row.graded_at <= cutoff else None
-            values["AT1_score_pct"] = float(score) if score is not None else None
-    return values
-
-
 def self_assessment(rows, cutoff):
     states = []
     for row in rows:
@@ -153,6 +139,8 @@ def build_training_data(data, course_id, target, badge_as_of):
     badge, badge_excluded = badge_labels(data, scope, badge_as_of) if target == "badge" and badge_as_of else ({}, {})
     features, labels, groups, included_offerings = [], [], [], set()
     excluded = Counter()
+    if target not in {"pass", "badge"}:
+        raise ValueError("unknown_target")
     pairs = set(events) if target == "badge" else set(academic) & set(events)
     for pair in pairs:
         person, offering_id = pair
@@ -163,31 +151,26 @@ def build_training_data(data, course_id, target, badge_as_of):
                 excluded["badge_outcome_unavailable"] += 1
                 continue
             cutoff, label = end_of_day(offering.ends_on), badge[pair]
-            keys, include_score = ("AT1", "AT2"), False
         else:
-            component = "AT2" if target == "weighted_final" else target
-            source = record["rows"].get(component) if record else None
-            cutoff = deadline(source) if source else None
-            score = record["final"] if target == "weighted_final" and record else record["scores"].get(target) if record else None
-            if cutoff is None or score is None:
-                excluded["missing_deadline_or_valid_score"] += 1
+            final = record["final"] if record else None
+            due_dates = [deadline(row) for row in (record["rows"].values() if record else ()) if row is not None]
+            due_dates = [due for due in due_dates if due is not None]
+            cutoff = max(due_dates) if due_dates else end_of_day(offering.ends_on) if offering.ends_on else None
+            if cutoff is None or final is None:
+                excluded["missing_cutoff_or_complete_course_result"] += 1
                 continue
-            label = score_band(score)
-            keys, include_score = (("AT1",), True) if target in {"AT2", "weighted_final"} else ((), False)
+            label = "passed" if record["state"] == "pass" else "not_passed"
         row = behavior(events[pair], offering, cutoff)
         row["self_assessment_completion_pct"] = self_assessment(self_rows.get(pair, []), cutoff)
-        row.update(assignment_features(record, cutoff, include_score, keys))
         features.append(row); labels.append(label); groups.append(person); included_offerings.add(offering_id)
     feature_names = list(BASE_FEATURES)
-    if target in {"AT2", "weighted_final"}:
-        feature_names += ["AT1_submitted", "AT1_late", "AT1_score_pct"]
-    elif target == "badge":
-        feature_names += ["AT1_submitted", "AT1_late", "AT2_submitted", "AT2_late"]
     frame = pd.DataFrame(features, columns=feature_names, dtype=float)
     summary = {"included_records": len(labels), "distinct_students": len(set(groups)),
                "contributing_offerings": len(included_offerings),
                "excluded": dict(excluded), "badge_excluded": badge_excluded,
-               "feature_policy": "course_start_through_target_cutoff_v1"}
+               "feature_policy": "canvas_and_non_scored_self_assessment_only_v2",
+               "feature_cutoff": "latest_assessment_deadline_for_pass;course_end_for_badge",
+               "excluded_predictors": ["AT1_submission", "AT2_submission", "AT1_score", "AT2_score", "weighted_grade"]}
     return TrainingData(frame, labels, groups, feature_names, summary)
 
 

@@ -62,15 +62,13 @@ def main():
         initial_rules = check("/api/v1/rules")
         model_history = check("/api/v1/models")
         assert all(run["course"] in {c["code"] for c in catalog["courses"]} and
-                   run["target"] in {"AT1", "AT2", "weighted_final", "badge"} for run in model_history["runs"])
+                   run["target"] in {"pass", "badge"} for run in model_history["runs"])
         for course in catalog["courses"]:
             for page in catalog["pages"]:
                 check("/api/v1/" + page, params={"course": course["code"]})
-            for target in ("AT1", "AT2", "weighted_final", "badge"):
+            for target in ("pass", "badge"):
                 result = check("/api/v1/insights", params={"course": course["code"], "target": target})
-                assert all(row["dimensions"]["course"] == course["code"] and row["dimensions"]["target"] == target
-                           for row in result["tables"]["associations"])
-                assert all(row["dimensions"]["model_status"] == "see_model_status" for row in result["tables"]["analysis_options"])
+                assert all(row["dimensions"]["target"] == target for row in result["tables"]["analysis_options"])
                 check("/api/v1/models", params={"course": course["code"], "target": target})
         for offering in catalog["offerings"]:
             params = {"course": offering["course"], "offering": offering["code"]}
@@ -83,10 +81,15 @@ def main():
         if len(catalog["offerings"]) > 1:
             codes = ",".join(o["code"] for o in catalog["offerings"][:2])
             for page in catalog["pages"]:
+                if page == "data-rules":
+                    continue
                 check("/api/v1/" + page, params={"offerings": codes})
         for page in catalog["pages"]:
             check("/api/v1/" + page)
             for offering in catalog["offerings"]:
+                if page == "data-rules":
+                    check("/api/v1/data-rules", 422, params={"offering": offering["code"]})
+                    continue
                 result = check("/api/v1/" + page, params={"offering": offering["code"]})
                 assert result["page"] == page
                 if page == "overview":
@@ -111,7 +114,7 @@ def main():
         check("/api/v1/engagement", 422, params={"interval": "hour"})
         check("/api/v1/outcomes", 422, params={"offering": "X", "offerings": "Y"})
         check("/api/v1/insights", 422, params={"target": "final_exam"})
-        check("/api/v1/overview", 422, params={"target": "AT1"})
+        check("/api/v1/overview", 422, params={"target": "pass"})
         check("/api/v1/models", 422, params={"unexpected": "rejected"})
     output = {"passed": True, "http_checks": len(checks), "pages": catalog["pages"],
               "offerings_checked": len(catalog["offerings"]), "mutated_rules": False}

@@ -7,7 +7,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import Boolean, CheckConstraint, Computed, Date, DateTime, ForeignKey, Index, Integer, JSON, Numeric, String, UniqueConstraint, func, text
+from sqlalchemy import Boolean, CheckConstraint, Computed, Date, DateTime, ForeignKey, Index, Integer, JSON, Numeric, String, Text, UniqueConstraint, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.mysql import DATETIME
 
@@ -216,8 +216,21 @@ class ModelRun(IdMixin, CreatedMixin, Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     __table_args__ = (
         CheckConstraint("cohort_policy = 'student_grouped'", name="cohort_policy"),
-        CheckConstraint("target IN ('AT1','AT2','weighted_final','badge')", name="target"),
+        CheckConstraint("target IN ('pass','badge')", name="target"),
         CheckConstraint("status IN ('pending','running','completed','insufficient','failed')", name="status"),
+    )
+
+
+class InsightNote(IdMixin, Base):
+    __tablename__ = "insight_notes"
+    course_id: Mapped[int] = mapped_column(ForeignKey("courses.id"), index=True)
+    offering_id: Mapped[int | None] = mapped_column(ForeignKey("course_offerings.id"), index=True)
+    scope_key: Mapped[str] = mapped_column(String(120), default="")
+    chart_key: Mapped[str] = mapped_column(String(160))
+    note: Mapped[str] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    __table_args__ = (
+        UniqueConstraint("course_id", "scope_key", "chart_key", name="uq_insight_notes_scope_chart"),
     )
 
 

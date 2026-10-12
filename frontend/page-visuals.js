@@ -1,5 +1,7 @@
 "use strict";
 
+import { bindSubmissionCharts, submissionChart } from "./submission-chart.js?v=20260930-7";
+
 const COLORS = ["#2878b5", "#d9792b", "#438a69", "#8057a5", "#c4515c", "#4b8795", "#768399"];
 const BAND_LABELS = {
   below_70: "Below 70", "70_to_below_80": "70–<80", "80_and_above": "80 and above",
@@ -12,10 +14,10 @@ const BAND_LABELS = {
   passed_and_badge: "Passed and Badge recorded", passed_no_badge_record: "Passed, no Badge record",
   badge_recorded_pass_not_confirmed: "Badge recorded, pass not confirmed", neither_confirmed: "Neither confirmed",
   valid: "Active Badge recorded", revoked_only: "Revoked Badge only",
-  needs_review: "Teaching period could not be confirmed", no_matched_award: "No Badge record found",
-  cohort_students: "Students represented", confirmed_course_passes: "Confirmed course passes",
-  valid_award_holders: "Students with an active Badge", assignment_students: "Total number of students",
-  engagement_students: "Students with Canvas activity", revoked: "Revoked Badge",
+  no_badge_record_or_other: "No Badge record found or other",
+  cohort_students: "Assignment cohort", confirmed_course_passes: "Confirmed course passes",
+  valid_award_holders: "Students with an active Badge", assignment_students: "Assignment cohort",
+  engagement_students: "Engagement cohort", revoked: "Revoked Badge",
   students: "Students (count)", views: "Page views (count)", responses: "Responses (count)",
   records: "Cases (count)", submitted_students: "Students submitted (count)",
   total_students: "Total students (count)", submitted_pct: "Submitted (%)",
@@ -29,10 +31,12 @@ const BAND_LABELS = {
   passed_students: "Passed students (count)", below_pass_mark_students: "Failed students (count)",
   result_unavailable_students: "Results unavailable (count)",
   submission_rate_pct: "Submitted (%)", pass_rate_pct: "Passed among valid results (%)",
+  answered_responses: "Written responses", classified_responses: "Responses matched to a type",
+  classification_matches: "Keyword matches",
   mean_score_pct: "Mean score (%)", mean_weighted_pct: "Mean weighted result (%)",
   pass_rate_among_complete_pct: "Passed among complete results (%)",
-  created_date: "Release proxy date", deadline_date: "Assignment deadline",
-  days_from_creation: "Days since assignment creation",
+  deadline_date: "Assignment deadline", days_from_deadline: "Days before/after deadline",
+  deadline_days_after_course_end: "Days after teaching period end",
   before_course_start: "Before course start", week_1: "Week 1", week_2: "Week 2",
   weeks_3_4: "Weeks 3–4", week_5_or_later: "Week 5 or later"
 };
@@ -42,7 +46,7 @@ const CATEGORY_COLORS = {
   result_unavailable: "#8793a5", revoked_only: "#c4515c",
   passed_and_badge: "#438a69", passed_no_badge_record: "#d9792b",
   badge_recorded_pass_not_confirmed: "#8057a5", neither_confirmed: "#8793a5",
-  needs_review: "#d9792b", no_matched_award: "#8793a5", unknown: "#768399"
+  no_badge_record_or_other: "#8793a5", unknown: "#768399"
 };
 const LIKERT_COLORS = ["#9f3131", "#d77973", "#898781", "#78a9df", "#245b99"];
 const LIKERT_LABELS = ["Strongly disagree", "Slightly disagree", "Neither agree nor disagree", "Slightly agree", "Strongly agree"];
@@ -64,6 +68,7 @@ const esc = value => String(value ?? "").replace(/[&<>"']/g, c => ({
   "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
 })[c]);
 const human = value => BAND_LABELS[value] || String(value ?? "").replaceAll("_", " ").replace(/\b\w/g, c => c.toUpperCase());
+const questionCode = value => String(value ?? "").replace(/^(Q\d+)\.0_/, "$1_");
 const number = (row, key) => typeof row?.metrics?.[key]?.value === "number" ? row.metrics[key].value : null;
 const shown = (metric, digits = 1, suffix = "") => {
   if (!metric || metric.suppressed || metric.value == null) return '<span class="unavailable">Not available</span>';
@@ -85,7 +90,7 @@ function details(rows, title = "View data") {
   const dimensions = [...new Set(rows.flatMap(row => Object.keys(row.dimensions || {})))];
   const metrics = [...new Set(rows.flatMap(row => Object.keys(row.metrics || {})))];
   return `<details><summary>${esc(title)} (${rows.length} rows)</summary><div class="table-wrap"><table><thead><tr><th>Item</th>${dimensions.map(key => `<th>${esc(human(key))}</th>`).join("")}${metrics.map(key => `<th>${esc(human(key))}</th>`).join("")}</tr></thead><tbody>${rows.map(row =>
-    `<tr><td>${esc(shortOffering(row.label))}</td>${dimensions.map(key => `<td>${esc(key === "offering" ? shortOffering(row.dimensions?.[key]) : row.dimensions?.[key] ?? "—")}</td>`).join("")}${metrics.map(key => `<td>${shown(row.metrics?.[key], 2, key.endsWith("_pct") || key === "nps" ? "%" : "")}</td>`).join("")}</tr>`).join("")}</tbody></table></div></details>`;
+    `<tr><td>${esc(shortOffering(row.label))}</td>${dimensions.map(key => `<td>${esc(key === "offering" ? shortOffering(row.dimensions?.[key]) : row.dimensions?.[key] ?? "—")}</td>`).join("")}${metrics.map(key => `<td>${shown(row.metrics?.[key], 2, key.endsWith("_pct") ? "%" : "")}</td>`).join("")}</tr>`).join("")}</tbody></table></div></details>`;
 }
 
 function panel(title, subtitle, body, rows = [], wide = false) {
@@ -125,10 +130,11 @@ function stacked(items) {
   return chart + `<div class="legend">${[...legend].map(([label,color]) => `<span><i style="background:${color}"></i>${esc(human(label))}</span>`).join("")}</div>`;
 }
 
-function lineChart(rows, metric, { xKey = "period", seriesKey, seriesLabel, numeric = false, aggregate = false, xTitle = "Reporting period", yTitle = human(metric), yMax, markers = [] } = {}) {
+function lineChart(rows, metric, { xKey = "period", seriesKey, seriesLabel, numeric = false, aggregate = false, xTitle = "Reporting period", yTitle = human(metric), markers = [], seriesColours = {} } = {}) {
   // Unknown positions stay in the folded data; they cannot have numeric coordinates.
   if (numeric) rows = rows.filter(row => row.dimensions?.[xKey] != null && Number.isFinite(Number(row.dimensions[xKey])));
-  let names = [...new Set(rows.map(row => seriesKey ? row.dimensions?.[seriesKey] : "All").filter(Boolean))].slice(0, 7);
+  let names = [...new Set(rows.map(row => seriesKey ? row.dimensions?.[seriesKey] : "All").filter(Boolean))];
+  const colour = (name,index) => seriesColours[name] || COLORS[index % COLORS.length];
   const periods = [...new Set([...rows.map(row => row.dimensions?.[xKey]), ...markers.map(marker => marker.period)].filter(value => value != null))]
     .sort((a, b) => numeric ? Number(a) - Number(b) : String(a).localeCompare(String(b)));
   if (!periods.length || !names.length) return "";
@@ -141,7 +147,7 @@ function lineChart(rows, metric, { xKey = "period", seriesKey, seriesLabel, nume
   });
   if (!values.size) return "";
   names = names.filter(name => periods.some(period => values.has(`${name}\u0000${period}`)));
-  const max = yMax || Math.max(...values.values(), 1), width = 860, height = 290, left = 58, right = 25, top = 35, bottom = 65;
+  const max = Math.max(...values.values(), 1), width = 860, height = 290, left = 58, right = 25, top = 35, bottom = 65;
   const x = index => left + (numeric ? (Number(periods[index]) - Number(periods[0])) / (Number(periods.at(-1)) - Number(periods[0]) || 1) : index / Math.max(periods.length - 1, 1)) * (width - left - right);
   const y = value => top + (max - value) * (height - top - bottom) / max;
   const paths = names.map((name, index) => {
@@ -149,27 +155,36 @@ function lineChart(rows, metric, { xKey = "period", seriesKey, seriesLabel, nume
     const segments = []; let part = [];
     [...points, null].forEach(point => { if (point) part.push(point); else if (part.length) { segments.push(part); part = []; } });
     const dots = periods.map((period, i) => values.has(`${name}\u0000${period}`)
-      ? `<circle cx="${x(i)}" cy="${y(values.get(`${name}\u0000${period}`))}" r="3.5" fill="${COLORS[index]}"><title>${esc(seriesLabel ? seriesLabel(name) : human(name))} · ${esc(period)}: ${values.get(`${name}\u0000${period}`)}</title></circle>` : "").join("");
-    return segments.filter(segment => segment.length > 1).map(segment => `<polyline points="${segment.join(" ")}" fill="none" stroke="${COLORS[index]}" stroke-width="2"/>`).join("") + dots;
+      ? `<circle cx="${x(i)}" cy="${y(values.get(`${name}\u0000${period}`))}" r="3.5" fill="${colour(name,index)}"><title>${esc(seriesLabel ? seriesLabel(name) : human(name))} · ${esc(period)}: ${values.get(`${name}\u0000${period}`)}</title></circle>` : "").join("");
+    return segments.filter(segment => segment.length > 1).map(segment => `<polyline points="${segment.join(" ")}" fill="none" stroke="${colour(name,index)}" stroke-width="2"/>`).join("") + dots;
   }).join("");
   const markerSvg = markers.map((marker, index) => {
     const position = periods.indexOf(marker.period);
     if (position < 0) return "";
-    return `<line x1="${x(position)}" y1="${top}" x2="${x(position)}" y2="${height-bottom}" class="deadline-marker"><title>${esc(marker.label)} · ${esc(marker.date || marker.period)}</title></line><text x="${x(position)+4}" y="${top+12+(index%2)*13}" class="deadline-label">${esc(marker.label)}</text>`;
+    const colour = marker.color || "#c4515c";
+    const coincident = markers.filter(item => String(item.period) === String(marker.period));
+    const offset = coincident.length > 1 ? (coincident.indexOf(marker) - (coincident.length - 1) / 2) * 4 : 0;
+    const markerX = x(position) + offset;
+    return `<line x1="${markerX}" y1="${top}" x2="${markerX}" y2="${height-bottom}" class="timeline-marker" stroke="${colour}"><title>${esc(marker.label)} · ${esc(marker.date || marker.period)}</title></line><text x="${markerX}" y="${top-12-(index%2)*13}" text-anchor="middle" class="timeline-label" style="fill:${colour}">${esc(marker.label)}</text>`;
   }).join("");
+  const markerLegends = [...new Map(markers.map(marker => [marker.legend || "Assignment deadline", marker.color || "#c4515c"])).entries()];
   const ticks = [...new Set([0, numeric && periods.includes("0") ? periods.indexOf("0") : Math.floor((periods.length - 1) / 2), periods.length - 1])];
-  return `<div class="line-chart"><svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${esc(yTitle)} by ${esc(xTitle)}"><text x="${left}" y="15">${esc(yTitle)}</text><line class="axis" x1="${left}" y1="${top}" x2="${left}" y2="${height-bottom}"/><line class="axis" x1="${left}" y1="${height-bottom}" x2="${width-right}" y2="${height-bottom}"/><text x="4" y="${top+5}">${max.toLocaleString("en-AU", {maximumFractionDigits:1})}</text><text x="8" y="${y(max/2)+4}">${(max/2).toLocaleString("en-AU", {maximumFractionDigits:1})}</text><text x="25" y="${height-bottom+4}">0</text>${markerSvg}${paths}${ticks.map(i => `<text x="${x(i)}" y="${height-bottom+20}" text-anchor="middle">${esc(periods[i])}</text>`).join("")}<text x="${width/2}" y="${height-8}" text-anchor="middle">${esc(xTitle)}</text></svg><div class="legend">${names.map((name, index) => `<span><i style="background:${COLORS[index]}"></i>${esc(seriesLabel ? seriesLabel(name) : seriesKey === "offering" ? shortOffering(name) : human(name))}</span>`).join("")}${markers.length ? '<span><i class="deadline-key"></i>Assignment deadline</span>' : ""}</div></div>`;
+  const yTicks=[0,max/2,max];
+  const grid=yTicks.map(value=>`<line x1="${left}" y1="${y(value)}" x2="${width-right}" y2="${y(value)}" class="chart-grid"/><text x="${left-8}" y="${y(value)+4}" text-anchor="end">${value.toLocaleString("en-AU",{maximumFractionDigits:1})}</text>`).join("");
+  return `<div class="line-chart"><svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${esc(yTitle)} by ${esc(xTitle)}">${grid}${markerSvg}${paths}${ticks.map(i => `<text x="${x(i)}" y="${height-bottom+20}" text-anchor="middle">${esc(periods[i])}</text>`).join("")}<text x="${width/2}" y="${height-8}" text-anchor="middle">${esc(xTitle)}</text></svg><div class="legend">${names.map((name, index) => `<span><i style="background:${colour(name,index)}"></i>${esc(seriesLabel ? seriesLabel(name) : seriesKey === "offering" ? shortOffering(name) : human(name))}</span>`).join("")}${markerLegends.map(([label,colour]) => `<span><i class="timeline-key" style="border-top-color:${colour}"></i>${esc(label)}</span>`).join("")}</div></div>`;
 }
 
-function heatmap(rows, rowKey, columnKey, metric, { parseRow, parseColumn, aggregate = false } = {}) {
+function heatmap(rows, rowKey, columnKey, metric, { parseRow, parseColumn, aggregate = false, highlight = "", columnOrder = [] } = {}) {
   const normalized = rows.map(row => ({ row, r: parseRow ? parseRow(row) : row.dimensions?.[rowKey], c: parseColumn ? parseColumn(row) : row.dimensions?.[columnKey], value: number(row, metric) }))
     .filter(item => item.r != null && item.c != null);
-  const rowNames = [...new Set(normalized.map(item => item.r))], columns = [...new Set(normalized.map(item => item.c))].sort();
+  const rank = name => { const index = columnOrder.indexOf(name); return index < 0 ? columnOrder.length : index; };
+  const rowNames = [...new Set(normalized.map(item => item.r))], columns = [...new Set(normalized.map(item => item.c))]
+    .sort((a,b) => columnOrder.length ? rank(a)-rank(b) || String(a).localeCompare(String(b)) : String(a).localeCompare(String(b)));
   if (!rowNames.length || !columns.length) return "";
   const values = new Map();
   normalized.forEach(item => { const key = `${item.r}\u0000${item.c}`; if (item.value != null) values.set(key, aggregate ? (values.get(key) || 0) + item.value : item.value); });
   const max = Math.max(...values.values(), 1);
-  return `<div class="heatmap-wrap"><table class="heatmap"><thead><tr><th></th>${columns.map(column => `<th>${esc(human(column))}</th>`).join("")}</tr></thead><tbody>${rowNames.map(name => `<tr><th>${esc(rowKey === "offering" ? shortOffering(name) : human(name))}</th>${columns.map(column => {
+  return `<div class="heatmap-wrap"><table class="heatmap"><thead><tr><th></th>${columns.map(column => `<th>${esc(human(column))}</th>`).join("")}</tr></thead><tbody>${rowNames.map(name => `<tr class="${name===highlight?"selected-period":""}" ${name===highlight?'aria-label="Selected teaching period"':""}><th>${esc(rowKey === "offering" ? shortOffering(name) : human(name))}</th>${columns.map(column => {
     const value = values.get(`${name}\u0000${column}`);
     return `<td style="--heat:${value == null ? 0 : Math.max(.08, value / max)}">${value == null ? "—" : value.toLocaleString("en-AU", {maximumFractionDigits:1})}</td>`;
   }).join("")}</tr>`).join("")}</tbody></table></div><div class="heat-legend"><span>Lower</span><i></i><span>Higher</span></div>`;
@@ -186,17 +201,17 @@ function calendar(rows) {
   return `<div class="table-wrap"><table><thead><tr><th>Offering</th><th>Course start</th><th>Course end</th></tr></thead><tbody>${rows.map(row => `<tr><td>${esc(shortOffering(row.dimensions.offering))}</td><td>${esc(row.dimensions.starts_on)}</td><td>${esc(row.dimensions.ends_on)}</td></tr>`).join("")}</tbody></table></div>`;
 }
 
-function gauges(rows) {
+function gauges(rows, { showOffering = true } = {}) {
   return `<div class="gauge-grid">${rows.map((row, index) => {
     const value = number(row, "mean_agreement"), pct = value == null ? 0 : Math.max(0, Math.min(100, value / 5 * 100));
-    return `<article><small>${esc(shortOffering(row.dimensions?.offering))}</small><div class="gauge" style="--score:${pct}%;--colour:${COLORS[index % COLORS.length]}"><span>${value == null ? "NA" : value.toFixed(2)}<small>/5</small></span></div><b>${esc(human(row.dimensions?.theme || row.label))}</b><small>${shown(row.metrics?.valid_responses)} valid responses</small></article>`;
+    return `<article>${showOffering ? `<small>${esc(shortOffering(row.dimensions?.offering))}</small>` : ""}<div class="gauge" style="--score:${pct}%;--colour:${COLORS[index % COLORS.length]}"><span>${value == null ? "NA" : value.toFixed(2)}<small>/5</small></span></div><b>${esc(human(row.dimensions?.theme || row.label))}</b><small>${shown(row.metrics?.valid_responses)} valid responses</small></article>`;
   }).join("")}</div>`;
 }
 
 function nps(row) {
   if (!row) return "";
   const values = ["detractor_pct", "passive_pct", "promoter_pct"].map(key => number(row, key) || 0);
-  const score=number(row,"nps"), scoreText=score==null?"Not available":`${score>0?"+":""}${score.toFixed(1)}%`;
+  const score=number(row,"nps"), scoreText=score==null?"Not available":`${score>0?"+":""}${score.toFixed(1)}`;
   const colours = ["#c4515c", "#dca547", "#438a69"], labels = ["Detractors", "Passives", "Promoters"];
   return `<div class="nps"><div class="nps-score"><small>Net Promoter Score (NPS)</small><strong>${scoreText}</strong><span>Range −100 to +100</span></div><div><div class="nps-track">${values.map((value,index) => `<i style="width:${value}%;background:${colours[index]}" title="${labels[index]}: ${value.toFixed(1)}%"></i>`).join("")}</div><div class="nps-breakdown">${labels.map((label,index)=>`<article style="--segment:${colours[index]}"><i></i><span>${label}</span><strong>${values[index].toFixed(1)}%</strong></article>`).join("")}</div><small>${shown(row.metrics?.valid_responses)} valid responses</small></div></div>`;
 }
@@ -205,20 +220,21 @@ function likert(questions, distribution) {
   if (!questions.length || !distribution.length) return "";
   const groups = QUESTION_GROUP_ORDER.map(theme => ({ theme, questions: questions.filter(row => row.dimensions?.theme === theme) }))
     .filter(group => group.questions.length);
-  return `<div class="survey-questions">${groups.map((group, groupIndex) => {
+  const legend = `<div class="legend likert-legend">${LIKERT_LABELS.map((label,index) => `<span><i style="background:${LIKERT_COLORS[index]}"></i>${index+1} · ${label}</span>`).join("")}</div>`;
+  const panels = groups.map((group, groupIndex) => {
     const fallback = QUESTION_GROUPS[group.theme] || [human(group.theme), human(group.theme)];
     const groupCode = group.questions[0].dimensions?.question_group || fallback[0];
     const groupLabel = group.questions[0].dimensions?.question_group_label || fallback[1];
     const itemCount = new Set(group.questions.map(row => row.dimensions?.question)).size;
-    const rows = [...group.questions].sort((a,b) => String(a.dimensions?.question).localeCompare(String(b.dimensions?.question), undefined, {numeric:true})).map(question => {
+    const rows = [...group.questions].sort((a,b) => questionCode(a.dimensions?.question).localeCompare(questionCode(b.dimensions?.question), undefined, {numeric:true})).map(question => {
       const bins = distribution.filter(row => row.dimensions?.offering === question.dimensions?.offering && row.dimensions?.question === question.dimensions?.question);
       const counts = [1,2,3,4,5].map(score => number(bins.find(row => String(row.dimensions?.agreement) === String(score)), "responses") || 0);
       const total = counts.reduce((sum,value) => sum + value, 0);
-      return `<div class="likert-row"><span><b>${esc(question.dimensions?.question)}</b> ${esc(question.label)}<small>${esc(shortOffering(question.dimensions?.offering))}</small></span><div>${counts.map((value,index) => `<i style="width:${total ? value/total*100 : 0}%;background:${LIKERT_COLORS[index]}" title="${LIKERT_LABELS[index]}: ${value} valid responses">${value || ""}</i>`).join("")}</div><b title="Mean agreement out of 5">${shown(question.metrics?.mean_agreement,2)} / 5</b><small>${shown(question.metrics?.valid_responses)} responses</small></div>`;
+      return `<div class="likert-row"><span><b>${esc(questionCode(question.dimensions?.question))}</b> ${esc(question.label)}<small>${esc(shortOffering(question.dimensions?.offering))}</small></span><div>${counts.map((value,index) => `<i style="width:${total ? value/total*100 : 0}%;background:${LIKERT_COLORS[index]}" title="${LIKERT_LABELS[index]}: ${value} valid responses">${value || ""}</i>`).join("")}</div><b title="Mean agreement out of 5">${shown(question.metrics?.mean_agreement,2)} / 5</b><small>${shown(question.metrics?.valid_responses)} responses</small></div>`;
     }).join("");
-    const legend = `<div class="legend likert-legend">${LIKERT_LABELS.map((label,index) => `<span><i style="background:${LIKERT_COLORS[index]}"></i>${index+1} · ${label}</span>`).join("")}</div>`;
-    return `<details class="survey-question-group" ${groupIndex===0?"open":""}><summary><span><b>${esc(groupCode)}</b> ${esc(groupLabel)}</span><small>${itemCount} statements</small></summary><div class="survey-question-list">${rows}${legend}</div></details>`;
-  }).join("")}</div>`;
+    return `<details class="survey-question-group" ${groupIndex===0?"open":""}><summary><span><b>${esc(groupCode)}</b> ${esc(groupLabel)}</span><small>${itemCount} statements</small></summary><div class="survey-question-list">${rows}</div></details>`;
+  }).join("");
+  return `${legend}<div class="survey-questions">${panels}</div>`;
 }
 
 const percent = (part, total) => part == null || total == null || !total ? "Not available" : `${(part / total * 100).toFixed(1)}%`;
@@ -235,7 +251,7 @@ function academic(tables) {
     const threshold=Number(row.dimensions.pass_threshold_pct);
     return `<article><h4>${esc(shortOffering(row.dimensions.offering))}</h4><p class="rule-note">${esc(row.dimensions.calculation_rule||"Pass rule unavailable")} · Pass mark ${Number.isFinite(threshold)?threshold.toLocaleString("en-AU",{maximumFractionDigits:2}):"—"}%</p><dl>
       <dt>Passed among valid results</dt><dd>${passed??"NA"} / ${complete??"NA"} (${percent(passed,complete)})</dd>
-      <dt>Fail</dt><dd>${below??"NA"}</dd>
+      <dt>Fail</dt><dd>${below??"NA"} / ${complete??"NA"}</dd>
       <dt>Result unavailable</dt><dd>${unknown??"NA"}</dd>
     </dl></article>`;}).join("")}</div>`;
   return panel("Confirmed course pass", "Uses the confirmed AT1/AT2 weighting and pass mark shown for each teaching period. Unavailable results are not treated as failures.", summaries+stacked(items), rows, true);
@@ -245,22 +261,37 @@ function notes(data) {
   return data.notes?.length ? `<details class="viz-panel wide notes"><summary>Definitions and limitations (${data.notes.length})</summary><ul>${data.notes.map(note => `<li>${esc(note)}</li>`).join("")}</ul></details>` : "";
 }
 
+function showNoData(ctx) {
+  ctx.metrics.innerHTML="";
+  ctx.coverage.innerHTML="";
+  ctx.tables.innerHTML='<article class="page-empty" role="status"><strong>No data available</strong><p>No data is available for this page in the selected course and teaching period.</p></article>';
+  ctx.notes.innerHTML="";
+}
+
 function renderOverview(data, ctx) {
   const m = data.metrics, t = data.tables;
   ctx.metrics.innerHTML = metricCards([
-    ["Teaching periods",m.offerings,"Count"],["Total number of students",m.assignment_students,"Distinct students in Canvas Assignments"],
-    ["Students with Canvas activity",m.engagement_students,"Distinct students in Canvas Engagement"],
-    ["Qualtrics survey responses",m.survey_completed_responses,"Completed responses"],
+    ["Teaching periods",m.offerings,"Count"],["Assignment cohort",m.assignment_students,"Distinct students with Canvas Assignment records"],
+    ["Engagement cohort",m.engagement_students,"Distinct students with Canvas Engagement records"],
+    ["Survey response cohort",m.survey_completed_responses,"Completed anonymous Qualtrics responses"],
     ["Salesforce support cases",m.support_records,"Verified course-scoped cases"]
   ]);
   ctx.coverage.innerHTML = coverageMatrix(data.coverage);
-  const feedback = `${gauges(t.survey_themes || [])}${nps((t.survey_nps || [])[0])}${details(t.survey_questions || [],"Survey question detail")}`;
+  const allTeachingPeriods = !data.filters?.offering;
+  const withoutOffering = rows => (rows || []).map(row => ({
+    ...row,
+    dimensions: Object.fromEntries(Object.entries(row.dimensions || {}).filter(([key]) => key !== "offering"))
+  }));
+  const surveyThemes = allTeachingPeriods ? withoutOffering(t.survey_themes) : (t.survey_themes || []);
+  const surveyQuestions = allTeachingPeriods ? withoutOffering(t.survey_questions) : (t.survey_questions || []);
+  const surveyNps = allTeachingPeriods ? withoutOffering(t.survey_nps) : (t.survey_nps || []);
+  const feedback = `${gauges(surveyThemes,{showOffering:!allTeachingPeriods})}${nps(surveyNps[0])}${details(surveyQuestions,"Survey question detail")}`;
   const supportRows = t.support_channels || [];
   ctx.tables.innerHTML = [
-    panel("Students coverage by teaching period","Assignment and Canvas activity files can contain different groups of students.",groupedColumns(t.offering_comparison || [],["assignment_students","engagement_students"]),t.offering_comparison || [],true),
+    panel("Cohort coverage by teaching period","Assignment cohort and Engagement cohort can contain different students.",groupedColumns(t.offering_comparison || [],["assignment_students","engagement_students"]),t.offering_comparison || [],true),
     panel("Teaching period dates","Confirmed start and end dates for each teaching period.",calendar(t.course_calendar || []),[],true),
     academic(t),
-    panel("Qualtrics feedback overview","Theme agreement uses a 1–5 scale. NPS uses a −100 to +100 scale and its segment shares use percentages.",feedback,[...(t.survey_themes||[]),...(t.survey_nps||[])],true),
+    panel("Qualtrics feedback overview","Theme agreement uses a 1–5 scale. NPS uses a −100 to +100 scale and its segment shares use percentages.",feedback,[...surveyThemes,...surveyNps],true),
     (t.support_data_status||[]).length ? `<article class="attention-card"><strong>Needs attention · Support data excluded</strong><p>The supplied case export has no verified course field or enrolment link. Date overlap alone is not enough to attribute cases to this course.</p></article>` :
       panel("Salesforce support overview","Verified course-scoped cases by contact channel",`${metricCards([["Salesforce support cases",(t.support_summary||[])[0]?.metrics?.records,"Cases"],["Median response time",(t.support_summary||[])[0]?.metrics?.median_response_hours,"Hours"]])}${bars(supportRows,"records",row=>human(row.dimensions?.group||row.label))}`,supportRows,true)
   ].join("");
@@ -274,7 +305,18 @@ function issueList(rows, selected) {
 
 function renderEngagement(data, ctx) {
   const t=data.tables, m=data.metrics;
-  ctx.metrics.innerHTML=metricCards([["Students with Canvas activity",m.students,"Students"],["Total page views",m.views,"Views"],["Average views per student",m.views_per_student,"Views per student"],["Salesforce support cases",m.support_records,"Cases"]]);
+  if (!(t.resource_categories?.length || t.support_summary?.length)) { showNoData(ctx); return; }
+  const comparison=ctx.engagementComparison?.tables || t;
+  const periods=ctx.state.catalog.offerings.filter(item=>item.course===ctx.state.course)
+    .sort((a,b)=>String(a.starts_on||"").localeCompare(String(b.starts_on||""))||a.code.localeCompare(b.code));
+  const scope=ctx.state.course+":"+ctx.state.offering;
+  if(ctx.state.weekScope!==scope) {ctx.state.weekScope=scope;ctx.state.weekOfferings=new Set([ctx.state.offering]);}
+  const palette=[...COLORS,"#167f85","#7a6437","#c5488c","#5867b0"];
+  const seriesColours=Object.fromEntries(periods.map((item,i)=>[item.code,palette[i%palette.length]]));
+  const weekRows=(comparison.activity_by_course_week||[]).filter(row=>ctx.state.weekOfferings.has(row.dimensions.offering));
+  const weekLegend=`<div class="legend period-legend">${periods.map(item=>`<button type="button" data-week-period="${esc(item.code)}" aria-pressed="${ctx.state.weekOfferings.has(item.code)}"><i style="background:${seriesColours[item.code]}"></i>${esc(shortOffering(item.code))}</button>`).join("")}</div>`;
+  const weekChart=`<div class="weekly-comparison">${weekRows.length?lineChart(weekRows,"views",{seriesKey:"offering",numeric:true,aggregate:true,xTitle:"Teaching week",yTitle:"Total page views",seriesColours}):'<p class="empty">No recorded activity for the selected periods.</p>'}</div>${weekLegend}`;
+  ctx.metrics.innerHTML=metricCards([["Engagement cohort",m.students,"Distinct students with Canvas Engagement records"],["Total page views",m.views,"Views"],["Average views per student",m.views_per_student,"Views per student"],["Salesforce support cases",m.support_records,"Case records"]]);
   ctx.coverage.innerHTML="";
   const activity=t.activity_by_start_date||[];
   const deadlines=(t.assignment_deadlines||[]).map(row=>({period:row.dimensions?.period,date:row.dimensions?.deadline_date,label:row.dimensions?.assessment_key||row.label}));
@@ -286,10 +328,10 @@ function renderEngagement(data, ctx) {
   const issueButtons=`<div class="chips" id="issueTopics"><button data-topic="all" class="${selected==="all"?"active":""}">All topics</button>${topics.map(topic=>`<button data-topic="${esc(topic)}" class="${selected===topic?"active":""}">${esc(human(topic))}</button>`).join("")}</div><div id="issueList">${issueList(issues,selected)}</div>`;
   const supportAvailable=(t.support_summary||[]).length>0;
   ctx.tables.innerHTML=[
-    panel("Where students engaged in Canvas","Students can appear in more than one Canvas area. Counts show students and page views.",`<div class="mini-grid">${["students","views"].map(key=>`<section class="mini-viz"><h4>${metricLabels[key]}</h4>${bars(t.resource_categories||[],key,row=>human(row.dimensions?.category))}</section>`).join("")}</div>${otherBreakdown}`,t.resource_categories||[],true),
+    panel("Where students engaged in Canvas","Students can appear in more than one Canvas area. Counts show page views and students.",`<div class="mini-grid">${["views","students"].map(key=>`<section class="mini-viz"><h4>${metricLabels[key]}</h4>${bars(t.resource_categories||[],key,row=>human(row.dimensions?.category))}</section>`).join("")}</div>${otherBreakdown}`,t.resource_categories||[],true),
     panel("Activity grouped by first access date","Each resource total is placed on the date it was first accessed. Dashed markers show AT1/AT2 deadlines.",`<div class="mini-grid">${activityCharts}</div>`,activity,true),
-    panel("Page views by teaching week","Week 1 begins on the confirmed course start date.",lineChart(t.activity_by_course_week||[],"views",{seriesKey:"offering",numeric:true,aggregate:true,xTitle:"Teaching week",yTitle:"Total page views"}),t.activity_by_course_week||[],true),
-    panel("Page views by learning stage","First-access activity before, during and after the confirmed teaching period.",heatmap(t.activity_by_course_phase||[],"offering","period","views",{aggregate:true}),t.activity_by_course_phase||[],true),
+    panel("Page views by teaching week","Week 1 begins on the confirmed course start date.",weekChart,weekRows,true),
+    panel("Page views by learning stage","First-access activity before, during and after the confirmed teaching period.",heatmap(comparison.activity_by_course_phase||[],"offering","period","views",{aggregate:true,highlight:ctx.state.offering,columnOrder:["before_start","during_course","after_end"]}),comparison.activity_by_course_phase||[],true),
     supportAvailable?panel("Salesforce support summary","Verified course-scoped cases and confirmed response times.",metricCards([["Salesforce support cases",(t.support_summary||[])[0]?.metrics?.records,"Cases"],["Cases with response time",(t.support_summary||[])[0]?.metrics?.response_n,"Cases"],["Median response time",(t.support_summary||[])[0]?.metrics?.median_response_hours,"Hours"]]),t.support_summary||[]):"",
     supportAvailable?panel("Salesforce case status","Open, closed and unknown support cases.",bars(t.support_status||[],"records",row=>human(row.dimensions?.group)),t.support_status||[]):"",
     supportAvailable?panel("Salesforce support demand over time","Case counts and response time in hours use separate charts.",`<div class="mini-grid"><section class="mini-viz"><h4>Support cases (count)</h4>${lineChart(t.support_timeline||[],"records",{xKey:"group",yTitle:"Cases (count)"})}</section><section class="mini-viz"><h4>Median response time (hours)</h4>${lineChart(t.support_timeline||[],"median_response_hours",{xKey:"group",yTitle:"Hours"})}</section></div>`,t.support_timeline||[],true):"",
@@ -302,6 +344,12 @@ function renderEngagement(data, ctx) {
     (t.support_data_status||[]).length ? `<article class="attention-card"><strong>Needs attention · Support data excluded</strong><p>This course export is filtered by date only and does not contain a verified course field or enrolment link.</p></article>` : ""
   ].join("");
   ctx.notes.innerHTML=notes(data);
+  ctx.enhance?.();
+  document.querySelectorAll("[data-week-period]").forEach(button=>button.onclick=()=>{
+    const code=button.dataset.weekPeriod;
+    if(ctx.state.weekOfferings.has(code))ctx.state.weekOfferings.delete(code);else ctx.state.weekOfferings.add(code);
+    renderEngagement(data,ctx);
+  });
   document.querySelectorAll("#issueTopics button").forEach(button=>button.onclick=()=>{ctx.state.supportTopic=button.dataset.topic;renderEngagement(data,ctx);});
 }
 
@@ -325,9 +373,19 @@ function assignmentDistribution(rows, name, labels={}, colors={}) {
 
 function renderAssignments(data,ctx) {
   const t=data.tables,m=data.metrics,assessments=t.assessments||[],groups=byOffering(assessments),sections=[];
-  ctx.metrics.innerHTML=metricCards([["Total number of students",m.students,"Distinct students in Canvas Assignments"]]);
+  if (!assessments.length) { showNoData(ctx); return; }
+  const scoredAssessments=assessments.filter(row=>row.dimensions?.kind==="scored");
+  const scoredDataUnavailable=ctx.state.mode!=="self_assessment"&&scoredAssessments.length>0&&scoredAssessments.every(row=>(number(row,"submitted_students")||0)===0&&(number(row,"graded_students")||0)===0);
+  if (scoredDataUnavailable) {
+    ctx.metrics.innerHTML="";
+    ctx.coverage.innerHTML="";
+    ctx.tables.innerHTML='<article class="page-empty" role="status"><strong>Assignment data unavailable</strong><p>Scored assignment records exist for this teaching period, but no submissions or usable results are recorded.</p></article>';
+    ctx.notes.innerHTML="";
+    return;
+  }
+  ctx.metrics.innerHTML=metricCards([["Assignment cohort",m.students,"Distinct students with Canvas Assignment records"]]);
   ctx.coverage.innerHTML="";
-  sections.push(`<section class="page-section"><header><h3>Assignment completion</h3><p>Submitted students out of all students with a record for each selected assignment.</p></header><div class="assignment-cards compact">${assessments.map(row=>{
+  sections.push(`<section class="page-section"><header><h3>Assignment completion</h3><p>Submitted students out of all students with a record for each assignment.</p></header><div class="assignment-cards compact">${assessments.map(row=>{
     const name=assignmentName(row),fullName=row.label===name?"":`<p class="assignment-title">${esc(row.label)}</p>`;
     return `<article><span>${esc(shortOffering(row.dimensions.offering))}</span><h4>${esc(name)}</h4>${fullName}<div class="completion-ratio"><strong>${shown(row.metrics.submitted_students,0)} / ${shown(row.metrics.students,0)}</strong><span>students submitted</span></div></article>`;
   }).join("")}</div></section>`);
@@ -336,9 +394,8 @@ function renderAssignments(data,ctx) {
     const select=key=>(t[key]||[]).filter(row=>row.dimensions.offering===offering&&refs.has(row.dimensions.assignment_ref));
     const name=ref=>assignmentName(rows.find(row=>row.dimensions.assignment_ref===ref)||{label:"Unmapped assignment",dimensions:{}});
     const hasScored=rows.some(row=>row.dimensions.kind==="scored")&&ctx.state.mode!=="self_assessment";
-    const scoredRefs=new Set(rows.filter(row=>row.dimensions.kind==="scored").map(row=>row.dimensions.assignment_ref));
-    const passRows=select("assessment_pass_status").filter(row=>scoredRefs.has(row.dimensions.assignment_ref));
     const curveRows=select("assignment_cumulative_submission"),scheduleRows=select("assignment_schedule");
+    const timelineBody=submissionChart(curveRows,scheduleRows);
     const statusItems=rows.map(item=>{
       const source=select("submission_status").filter(row=>row.dimensions.assignment_ref===item.dimensions.assignment_ref);
       const count=bands=>source.filter(row=>bands.includes(row.dimensions.band)).reduce((sum,row)=>sum+(number(row,"students")||0),0);
@@ -350,10 +407,9 @@ function renderAssignments(data,ctx) {
     });
     const academicRows=(t.academic_results||[]).filter(row=>row.dimensions.offering===offering);
     sections.push(`<section class="page-section"><header><h3>${esc(shortOffering(offering))}</h3><p>Submission and Pass results for this teaching period.</p></header><div class="viz-grid">
-      ${panel("Submission status","Submitted and graded are Canvas source states. Result availability is shown separately in Pass status.",stacked(statusItems),select("submission_status"),true)}
+      ${panel("Submission status","Submitted and graded are Canvas source states. Confirmed course pass is shown separately below.",stacked(statusItems),select("submission_status"),true)}
       ${panel("Number of attempts","Latest exported attempt number; a missing attempt stays unavailable.",assignmentDistribution(select("attempt_distribution"),name,{"1":"One attempt","2":"Two attempts","3_plus":"More than two attempts",unknown:"Attempt count unavailable"}),select("attempt_distribution"),true)}
-      ${curveRows.length?panel("Cumulative submissions after the release proxy date","The source has no publication timestamp, so the earliest recorded Canvas created_at date is used as a clearly labelled proxy. The dashed line is the assignment deadline.",lineChart(curveRows,"submitted_pct",{xKey:"days_from_creation",seriesKey:"assignment_ref",seriesLabel:name,numeric:true,xTitle:"Calendar days since release proxy",yTitle:"Students submitted (%)",yMax:100,markers:scheduleRows.filter(row=>row.dimensions.deadline_days_from_creation!=="unknown").map(row=>({period:row.dimensions.deadline_days_from_creation,date:row.dimensions.deadline_date,label:`${row.dimensions.assessment_key} deadline`}))}),[...scheduleRows,...curveRows],true):panel("Cumulative submissions after the release proxy date","No usable created_at values are available for this selection.","",scheduleRows,true)}
-      ${hasScored?panel("Assignment pass status","Passed means a valid result met the confirmed pass mark. Fail means a valid result was below the pass mark. Unavailable results are not counted as failures.",assignmentDistribution(passRows,name,{passed:"Passed",below_pass_mark:"Fail",result_unavailable:"Result unavailable"},{passed:"#438a69",below_pass_mark:"#c4515c",result_unavailable:"#8793a5"}),passRows,true):""}
+      ${curveRows.length?panel("When do learners submit after an assignment is released?","AT1 and AT2 cumulative counts aligned to their own source deadlines.",timelineBody,[...scheduleRows,...curveRows],true):panel("When do learners submit after an assignment is released?","No usable assignment deadline and submission dates are available for this selection.","",scheduleRows,true)}
       ${hasScored?academic({academic_results:academicRows}):""}
       ${select("self_assessment_completion").length?panel("Self-assessment completion","Completion means submitted or graded participation; these activities are not scored.",assignmentDistribution(select("self_assessment_completion"),name),select("self_assessment_completion"),true):""}
     </div></section>`);
@@ -365,17 +421,17 @@ function renderAssignments(data,ctx) {
   }
   const badgeRows=t.badge_status||[], reconciliation=t.badge_course_reconciliation||[];
   if (badgeRows.length) {
-    const badgeItems=[{label:"Assignment population",segments:badgeRows.map(row=>({label:row.key,value:number(row,"students"),color:CATEGORY_COLORS[row.key]}))}];
-    const checkItems=[{label:"Assignment population",segments:reconciliation.map(row=>({label:row.key,value:number(row,"students"),color:CATEGORY_COLORS[row.key]||COLORS[0]}))}];
+    const badgeItems=[{label:"Assignment cohort",segments:badgeRows.map(row=>({label:row.key,value:number(row,"students"),color:CATEGORY_COLORS[row.key]}))}];
+    const checkItems=[{label:"Assignment cohort",segments:reconciliation.map(row=>({label:row.key,value:number(row,"students"),color:CATEGORY_COLORS[row.key]||COLORS[0]}))}];
     const passedWithout=number(reconciliation.find(row=>row.key==="passed_no_badge_record"),"students");
     const badgeWithout=number(reconciliation.find(row=>row.key==="badge_recorded_pass_not_confirmed"),"students");
-    sections.push(`<section class="page-section badge-section"><header><h3>Course completion and Badge records</h3><p>Confirmed course pass is shown above. Badge evidence is matched to the same Assignment population by student and teaching period.</p></header>${(passedWithout||badgeWithout)?`<article class="attention-card"><strong>Course pass and Badge records differ</strong><p>${passedWithout||0} passed students have no active Badge record; ${badgeWithout||0} active Badge records do not have a confirmed pass in the current assignment snapshot.</p></article>`:""}<div class="viz-grid">
-      ${panel("Badge record status","Active, revoked, unmatched and review states. No Badge record does not mean the student failed.",stacked(badgeItems),badgeRows,true)}
+    sections.push(`<section class="page-section badge-section"><header><h3>Course completion and Badge records</h3><p>Confirmed course pass is shown above. Badge evidence is matched to the same Assignment cohort by student and teaching period.</p></header>${(passedWithout||badgeWithout)?`<article class="attention-card"><strong>Course pass and Badge records differ</strong><p>${passedWithout||0} passed students have no active Badge record; ${badgeWithout||0} active Badge records do not have a confirmed pass in the current assignment snapshot.</p></article>`:""}<div class="viz-grid">
+      ${panel("Badge record status","Active, revoked, and no record or other states. Missing evidence does not mean the student failed.",stacked(badgeItems),badgeRows,true)}
       ${panel("Course pass and Badge check","Both measures use students with Assignment records. Differences are retained for review.",stacked(checkItems),reconciliation,true)}
-      ${panel("Completion and Badge counts by teaching period","Student counts for the Assignment population, confirmed course passes and active Badge records.",groupedColumns(t.badge_offering_comparison||[],["total_students","confirmed_passes","active_badges"]),t.badge_offering_comparison||[],true)}
+      ${panel("Completion and Badge counts by teaching period","Assignment cohort, confirmed course passes and active Badge records.",groupedColumns(t.badge_offering_comparison||[],["total_students","confirmed_passes","active_badges"]),t.badge_offering_comparison||[],true)}
     </div></section>`);
   }
-  ctx.tables.innerHTML=sections.join("");ctx.notes.innerHTML=notes(data);
+  ctx.tables.innerHTML=sections.join("");bindSubmissionCharts(ctx.tables);ctx.notes.innerHTML=notes(data);ctx.enhance?.();
 }
 
 const feedbackGroup = row => FEEDBACK_GROUPS[row.dimensions?.question_group] || human(row.dimensions?.question_group);
@@ -385,31 +441,98 @@ function feedbackResponseChart(rows) {
 }
 
 function feedbackTopChart(rows) {
-  return `<div class="feedback-bars">${bars(rows, "responses", row => `${feedbackGroup(row)} top1 → ${human(row.label)}`, 20, () => COLORS[0])}</div>`;
+  const max=Math.max(...rows.map(row=>number(row,"responses")||0),1);
+  return `<div class="feedback-top-list">${rows.map(row=>{
+    const top=number(row,"responses"),classified=number(row,"classified_responses"),answered=number(row,"answered_responses"),matches=number(row,"classification_matches");
+    const matchNote=matches!=null&&classified!=null&&matches!==classified?` · ${matches} keyword matches because one response can match several types`:"";
+    return `<article><div><span>${esc(feedbackGroup(row))} top1 → ${esc(human(row.label))}</span><b>${top??"NA"}</b></div><i><b style="width:${top==null?0:top/max*100}%"></b></i><small>Classified ${classified??"NA"} of ${answered??"NA"} responses${esc(matchNote)}.</small></article>`;
+  }).join("")}</div>`;
+}
+
+function feedbackComments(rows, responseCounts) {
+  const categories=[...new Set([...Object.keys(FEEDBACK_GROUPS),...rows.map(row=>row.dimensions?.question_group).filter(Boolean)])];
+  const totals=new Map(responseCounts.map(row=>[row.dimensions?.question_group,number(row,"responses")]));
+  return `<div class="feedback-comments">${categories.map(category=>{
+    const comments=rows.filter(row=>row.dimensions?.question_group===category);
+    const pages=Math.max(1,Math.ceil(comments.length/2));
+    const cards=comments.length?comments.map((row,index)=>`<article class="feedback-comment" data-comment-index="${index}" ${index>=2?"hidden":""}><p>${esc(row.label)}</p>${(number(row,"responses")||0)>1?`<small>Repeated ${number(row,"responses")} times</small>`:""}</article>`).join(""):'<p class="empty">No written comments are available for this topic.</p>';
+    const controls=pages>1?`<div class="comment-pages"><button type="button" data-comment-step="-1" disabled>Previous</button><span>1 / ${pages}</span><button type="button" data-comment-step="1">Next</button></div>`:"";
+    return `<section class="feedback-comment-topic" data-comment-page="0"><header><h4>${esc(FEEDBACK_GROUPS[category]||human(category))}</h4><span>${totals.get(category)??0} responses</span></header><div class="feedback-comment-list">${cards}</div>${controls}</section>`;
+  }).join("")}</div>`;
+}
+
+function bindFeedbackComments(root) {
+  root.querySelectorAll("[data-comment-page]").forEach(topic=>{
+    const comments=[...topic.querySelectorAll("[data-comment-index]")],buttons=[...topic.querySelectorAll("[data-comment-step]")],status=topic.querySelector(".comment-pages span");
+    if (!buttons.length) return;
+    const pages=Math.ceil(comments.length/2);
+    const render=page=>{
+      topic.dataset.commentPage=String(page);
+      comments.forEach((comment,index)=>comment.hidden=Math.floor(index/2)!==page);
+      buttons[0].disabled=page===0;buttons[1].disabled=page===pages-1;status.textContent=`${page+1} / ${pages}`;
+    };
+    buttons.forEach(button=>button.onclick=()=>render(Math.max(0,Math.min(pages-1,Number(topic.dataset.commentPage)+Number(button.dataset.commentStep)))));
+  });
 }
 
 function renderOutcomes(data,ctx){
   const t=data.tables,m=data.metrics;
-  ctx.metrics.innerHTML=metricCards([["Qualtrics survey responses",m.survey_completed_responses,"Completed responses"]],true);
+  if (!(t.survey_nps?.length || t.survey_themes?.length || t.survey_questions?.length || t.survey_feedback_comments?.length)) { showNoData(ctx); return; }
+  ctx.metrics.innerHTML=metricCards([["Survey response cohort",m.survey_completed_responses,"Completed anonymous Qualtrics responses"]],true);
   ctx.coverage.innerHTML="";
   const offering=data.filters?.offering, scope=offering ? `Showing offering ${shortOffering(offering)}.` : "Showing all offerings combined; use the Offering selector to view one teaching period.";
   ctx.tables.innerHTML=`<div class="scope-note"><b>Qualtrics feedback scope</b><span>${esc(scope)}</span></div><div class="viz-grid">
     ${panel("Would students recommend the MicroCert?","NPS ranges from −100 to +100. Segment shares show the percentage of valid 0–10 responses.",(t.survey_nps||[]).map(row=>`<section class="nps-offering"><h4>${esc(shortOffering(row.dimensions?.offering))}</h4>${nps(row)}</section>`).join(""),t.survey_nps||[],true)}
-    ${panel("Qualtrics theme scores","Mean agreement uses a 1–5 scale. Each completed response is weighted equally after meeting the theme answer requirement.",gauges(t.survey_themes||[]),t.survey_themes||[],true)}
-    ${panel("Qualtrics question response distribution","Open Q1, Q3, Q4 or Q5 to compare every statement in that original question. Each group includes its own 1–5 colour key.",likert(t.survey_questions||[],t.survey_distribution||[]),[...(t.survey_questions||[]),...(t.survey_distribution||[])],true)}
+    ${panel("Qualtrics theme scores","A response contributes to a theme after answering at least half of that theme's items, so valid response counts can differ.",gauges(t.survey_themes||[]),t.survey_themes||[],true)}
+    ${panel("Qualtrics question response distribution","Open Q1, Q3, Q4 or Q5 to compare every statement. The shared 1–5 colour key applies to all four groups.",likert(t.survey_questions||[],t.survey_distribution||[]),[...(t.survey_questions||[]),...(t.survey_distribution||[])],true)}
     ${panel("Topic feedback statistics","Compares completed text responses across four feedback topics. A higher column means more students answered that topic.",feedbackResponseChart(t.survey_feedback_response_counts||[]),t.survey_feedback_response_counts||[],true)}
-    ${panel("Most common feedback type in each area","Shows the highest-frequency classified feedback type within each area. This describes the leading request or theme, rather than sentiment.",feedbackTopChart(t.survey_feedback_topic_highlights||[]),t.survey_feedback_topics||[],true)}
-    ${panel("Anonymous feedback comments","Comments appear only in View data below. Direct identifiers are removed and comments retain their feedback category.","<p class=\"folded-copy\">Open View data to read the cleaned comments by feedback category.</p>",t.survey_feedback_comments||[],true)}
+    ${panel("Most common feedback type in each area","Shows each area's leading classified type and how many written responses matched any keyword rule. One response can match several types.",feedbackTopChart(t.survey_feedback_topic_highlights||[]),t.survey_feedback_topics||[],true)}
+    ${panel("Anonymous feedback comments","Shows two cleaned comments per topic at a time. Use Previous and Next to read more without changing the saved insight.",feedbackComments(t.survey_feedback_comments||[],t.survey_feedback_response_counts||[]),t.survey_feedback_comments||[],true)}
   </div>`;
+  bindFeedbackComments(ctx.tables);
   ctx.notes.innerHTML=notes(data);
 }
 
-export function renderSpecialPage(data,{state,el}){
-  const renderer={overview:renderOverview,engagement:renderEngagement,assignments:renderAssignments,outcomes:renderOutcomes}[data.page];
+function sourceGuide(rows) {
+  return `<div class="source-guide">${rows.map(row=>{
+    const d=row.dimensions||{}, status=d.availability||"Not available";
+    const tone=status==="Available"?"available":status.startsWith("Excluded")?"excluded":"missing";
+    const accepted=number(row,"accepted_rows"),input=number(row,"input_rows"),warnings=number(row,"warning_rows");
+    const quality=[accepted!=null?`${accepted.toLocaleString("en-AU")} accepted`:"",input!=null?`${input.toLocaleString("en-AU")} input rows`:"",warnings?`${warnings.toLocaleString("en-AU")} warnings`:""].filter(Boolean).join(" · ");
+    return `<article class="source-guide-card"><header><div><small>${esc(d.platform)}</small><h3>${esc(row.label)}</h3></div><span class="reference-status ${tone}">${esc(status)}</span></header><dl><div><dt>What it contains</dt><dd>${esc(d.contains)}</dd></div><div><dt>Unit</dt><dd>${esc(d.unit)}</dd></div><div><dt>Coverage</dt><dd>${esc(d.coverage)}</dd></div></dl>${quality?`<p class="source-quality">Import snapshot: ${esc(quality)}</p>`:""}</article>`;
+  }).join("")}</div>`;
+}
+
+function glossaryGuide(rows) {
+  const groups=[...new Set(rows.map(row=>row.dimensions?.category).filter(Boolean))];
+  return groups.map(group=>`<section class="glossary-group"><h3>${esc(group)}</h3><div class="glossary-list">${rows.filter(row=>row.dimensions?.category===group).map(row=>`<article><h4>${esc(row.label)}</h4><p>${esc(row.dimensions.definition)}</p><small>Used on: ${esc(row.dimensions.used_on)}</small></article>`).join("")}</div></section>`).join("");
+}
+
+function referenceTable(rows, columns) {
+  if(!rows.length)return '<p class="empty">No records are available for this course.</p>';
+  return `<div class="table-wrap"><table class="reference-table"><thead><tr><th>Item</th>${columns.map(([,label])=>`<th>${esc(label)}</th>`).join("")}</tr></thead><tbody>${rows.map(row=>`<tr><th>${esc(shortOffering(row.label))}</th>${columns.map(([key])=>`<td>${esc(key==="scope"?shortOffering(row.dimensions?.[key]):row.dimensions?.[key]??"—")}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+}
+
+function renderDataRules(data,ctx){
+  const t=data.tables||{};
+  ctx.metrics.innerHTML="";
+  ctx.coverage.innerHTML=`<section class="reference-intro"><span>Course reference guide</span><h2>How to read this dashboard</h2><p>Data sources, shared terms and calculation rules for the selected course. These definitions apply across every teaching period.</p></section>`;
+  ctx.tables.innerHTML=`<div class="reference-manual">
+    <section class="reference-section"><header><span>01</span><div><h2>Data sources</h2><p>Where each dataset comes from, what one record means and whether it can be used for this course.</p></div></header>${sourceGuide(t.data_sources||[])}</section>
+    <section class="reference-section"><header><span>02</span><div><h2>Glossary</h2><p>The same term has the same meaning everywhere in the dashboard.</p></div></header>${glossaryGuide(t.glossary||[])}</section>
+    <section class="reference-section"><header><span>03</span><div><h2>Calculation rules</h2><p>How the main indicators are calculated and which denominator they use.</p></div></header>${referenceTable(t.calculation_rules||[],[["calculation","Calculation"],["denominator","Population or denominator"]])}</section>
+    <section class="reference-section"><header><span>04</span><div><h2>Assessment rules</h2><p>The active and historical course rules stored by the backend.</p></div></header>${referenceTable(t.assessment_rules||[],[["course","Course"],["scope","Scope"],["components","Components"],["pass_mark","Pass mark"],["status","Status"]])}</section>
+    <section class="reference-section"><header><span>05</span><div><h2>Data limitations</h2><p>Boundaries that should be checked before interpreting a comparison.</p></div></header><div class="limitation-list">${(t.data_limitations||[]).map(row=>`<article><h3>${esc(row.label)}</h3><p>${esc(row.dimensions?.explanation)}</p></article>`).join("")}</div></section>
+  </div>`;
+  ctx.notes.innerHTML="";
+}
+
+export function renderSpecialPage(data,{state,el,...extra}){
+  const renderer={overview:renderOverview,engagement:renderEngagement,assignments:renderAssignments,outcomes:renderOutcomes,"data-rules":renderDataRules}[data.page];
   if(!renderer)return false;
-  const ctx={state,metrics:el("metrics"),coverage:el("coverage"),tables:el("tables"),notes:el("notes")};
+  const ctx={...extra,state,metrics:el("metrics"),coverage:el("coverage"),tables:el("tables"),notes:el("notes")};
   [ctx.metrics,ctx.coverage,ctx.tables,ctx.notes].forEach(node=>node.classList.add("special-page"));
-  renderer(data,ctx);return true;
+  renderer(data,ctx);ctx.enhance?.();return true;
 }
 
 export function clearSpecialPage(el){["metrics","coverage","tables","notes"].forEach(id=>el(id).classList.remove("special-page"));}

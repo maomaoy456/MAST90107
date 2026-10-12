@@ -4,6 +4,8 @@ from app.dashboard.calendar import phase
 from app.dashboard.contracts import TableRow
 from app.dashboard.privacy import metric
 
+PHASE_ORDER = {"before_start": 0, "during_course": 1, "after_end": 2, "unknown": 3}
+
 
 def add_engagement_stages(page, data, scope, reason):
     from app.dashboard.engagement import category
@@ -19,7 +21,9 @@ def add_engagement_stages(page, data, scope, reason):
             tables["activity_by_course_phase"][(stage, category(row))].append(row)
             tables["activity_by_course_week"][(week, category(row))].append(row)
         for name, bins in tables.items():
-            for (period, kind), group in sorted(bins.items()):
+            ordered = sorted(bins.items(), key=lambda item: (
+                PHASE_ORDER.get(item[0][0], 99), item[0][1])) if name == "activity_by_course_phase" else sorted(bins.items())
+            for (period, kind), group in ordered:
                 people = {r.student_id for r in group}
                 code = offering.offering_code or "unlabelled"
                 page.tables.setdefault(name, []).append(TableRow(key=f"{code}:{period}:{kind}", label=period,

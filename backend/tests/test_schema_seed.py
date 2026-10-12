@@ -16,7 +16,7 @@ def test_required_tables_present():
         "import_batches", "import_errors", "students", "courses", "course_offerings",
         "assignments", "engagement_events", "assignment_submissions", "badge_classes",
         "badge_awards", "badge_class_course_mapping", "assessment_rules", "model_runs",
-        "offering_calendars", "survey_responses", "support_cases",
+            "offering_calendars", "survey_responses", "support_cases", "insight_notes",
     }
 
 

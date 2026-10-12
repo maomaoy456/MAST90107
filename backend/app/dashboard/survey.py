@@ -1,6 +1,7 @@
 """Anonymous survey aggregates and redacted completed-response comments."""
 from collections import Counter, defaultdict
 from math import ceil
+import re
 from statistics import mean
 from app.dashboard.contracts import TableRow
 from app.dashboard.privacy import metric, partition
@@ -36,19 +37,20 @@ def add_survey(page, data, scope):
             for q, label in questions.items():
                 if page.page == "overview" and q != "Q1_5":
                     continue
+                display_question = re.sub(r"^(Q\d+)\.0_", r"\1_", q)
                 valid = {r.id for r in rows if r.answers.get(q) is not None}
                 bins = {str(i): {r.id for r in rows if r.answers.get(q) == i} for i in range(1, 6)}
                 gate = group_guard([valid], population)
-                page.tables.setdefault("survey_questions", []).append(TableRow(key=code + ":" + q, label=label,
-                    dimensions={"offering": code, "question": q, "theme": theme,
+                page.tables.setdefault("survey_questions", []).append(TableRow(key=code + ":" + display_question, label=label,
+                    dimensions={"offering": code, "question": display_question, "theme": theme,
                                 "question_group": group_code, "question_group_label": group_label}, metrics={
                         "valid_responses": metric(len(valid), valid, gate),
                         "mean_agreement": metric(mean([r.answers[q] for r in rows if r.id in valid]) if valid else None, valid, gate)}))
                 if page.page == "overview":
                     continue
                 for row in partition([(k, k, v) for k, v in bins.items()], reason=gate):
-                    row.dimensions = {"offering": code, "question": q, "agreement": row.key}
-                    row.key = code + ":" + q + ":" + row.key
+                    row.dimensions = {"offering": code, "question": display_question, "agreement": row.key}
+                    row.key = code + ":" + display_question + ":" + row.key
                     row.metrics = {"responses": row.metrics["students"]}
                     page.tables.setdefault("survey_distribution", []).append(row)
         nps = [r for r in rows if r.nps is not None]
@@ -89,10 +91,18 @@ def add_survey(page, data, scope):
                  if topic not in {"other_unclassified", "no_text"}),
                 key=lambda item: (-len(item[1]), item[0]),
             )[:5]
+            classified_groups = [people for topic, people in groups.items()
+                                 if topic not in {"other_unclassified", "no_text"}]
+            classified = set().union(*classified_groups) if classified_groups else set()
+            coverage_metrics = {
+                "answered_responses": metric(len(answered), answered, gate),
+                "classified_responses": metric(len(classified), classified, gate),
+                "classification_matches": metric(sum(len(people) for people in classified_groups), classified, gate),
+            }
             for rank, (topic, people) in enumerate(ranked, 1):
                 item = TableRow(key=f"{code}:{category}:{topic}", label=topic,
                     dimensions={"offering": code, "question_group": category, "classification": "keyword_rules_v1"},
-                    metrics={"responses": metric(len(people), people, gate)})
+                    metrics={"responses": metric(len(people), people, gate), **coverage_metrics})
                 page.tables.setdefault("survey_feedback_topics", []).append(item)
                 if rank == 1:
                     page.tables.setdefault("survey_feedback_topic_highlights", []).append(item.model_copy(deep=True))

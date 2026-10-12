@@ -1,33 +1,36 @@
 "use strict";
 
-import { clearSpecialPage, renderSpecialPage } from "./page-visuals.js?v=20260924-3";
-import { renderInsightsPage } from "./insights-visuals.js?v=20260924-3";
+import { createChartNotes } from "./chart-notes.js?v=20260930-7";
 
-const state = { catalog: null, page: "overview", course: "", offering: "", assignments: new Set(), interval: "day", mode: "scored", supportTopic: "all", insightsTab: "exploration", insightArea: "engagement_grade", explorationTarget: "AT1", modelTarget: "all" };
+import { clearSpecialPage, renderSpecialPage } from "./page-visuals.js?v=20260930-7";
+import { renderInsightsPage } from "./insights-visuals.js?v=20260930-7";
+
+const state = { catalog: null, page: "overview", course: "", offering: "", interval: "day", mode: "scored", supportTopic: "all", insightsTab: "summary", modelTarget: "all" };
 const pageNames = {
   overview: "Overview", engagement: "Engagement", assignments: "Assignments",
-  outcomes: "Feedback", insights: "Insights", "data-rules": "Data & Rules"
+  outcomes: "Feedback", insights: "Summary & Recommendations", "data-rules": "Data & Rules"
 };
 if (location.hash.slice(1) in pageNames) state.page = location.hash.slice(1);
 const knownLabels = {
   students: "Students", offerings: "Offerings", courses: "Courses", records: "Records",
   macro_f1: "Macro F1", balanced_accuracy: "Balanced Accuracy",
-  engagement_students: "Students with Canvas activity", assignment_students: "Total number of students",
-  valid_award_holders: "Students with an active Badge", cohort_memberships: "Students represented",
+  engagement_students: "Engagement cohort", assignment_students: "Assignment cohort",
+  valid_award_holders: "Students with an active Badge", cohort_memberships: "Assignment cohort",
   mean_score_pct: "Mean score (%)", submission_rate_pct: "Submission rate (%)",
 };
 const cohortLabels = {
-  source_specific: "Student groups from each available data source",
-  all_engagement: "Students with Canvas activity in the selected teaching period",
-  all_assignment: "Students with assignment records in the selected teaching period",
-  completed_qualtrics_responses: "Completed anonymous Qualtrics responses in the selected teaching period",
-  course_separated_student_offering_records: "Linked student records pooled across teaching periods for this course",
-  metadata_only: "Source and rule metadata for the selected scope"
+  source_specific: "Source-specific cohorts; definitions are in Data & Rules",
+  all_engagement: "Engagement cohort for the selected teaching period",
+  all_assignment: "Assignment cohort for the selected teaching period",
+  completed_qualtrics_responses: "Survey response cohort for the selected teaching period",
+  course_separated_student_offering_records: "Model cohort pooled across teaching periods for this course",
+  metadata_only: "Course-wide reference information"
 };
 const colours = ["#355b88", "#d97706", "#16856b", "#8b5cf6", "#dc4c64", "#64748b"];
 let pageRequest = 0;
 const staticSnapshot = window.__MPE_STATIC_SNAPSHOT__ || null;
 const staticMode = Boolean(staticSnapshot);
+
 
 const el = id => document.getElementById(id);
 const escapeHtml = value => String(value ?? "").replace(/[&<>'"]/g, character => ({
@@ -59,6 +62,10 @@ async function api(path, options = {}) {
   if (!response.ok) throw new Error(`Request failed (HTTP ${response.status})`);
   return response.json();
 }
+
+const chartNotes = createChartNotes({api,state,snapshot:staticSnapshot,showMessage});
+el("downloadInsightHtml").hidden = !staticMode;
+el("downloadInsightHtml").onclick = chartNotes.download;
 
 function metricValue(metric) {
   if (!metric || metric.value === null || metric.value === undefined) return '<span class="unavailable">Not available</span>';
@@ -134,19 +141,19 @@ function renderTables(data) {
 
 function currentParams(extra = {}) {
   const params = new URLSearchParams({ course: state.course, ...extra });
-  if (state.offering && state.page !== "insights") params.set("offering", state.offering);
+  if (state.offering && !["insights", "data-rules"].includes(state.page)) params.set("offering", state.offering);
   return params;
 }
 
 function filterMarkup() {
   if (state.page === "engagement") return `<label>Time interval<select id="interval"><option value="day">Day</option><option value="week">Week</option><option value="month">Month</option></select></label>`;
-  if (state.page === "assignments") return `<label>Assignment type<select id="mode"><option value="combined">All activities</option><option value="scored">Scored</option><option value="self_assessment">Self-assessment</option></select></label><fieldset class="assignment-picker"><legend>Assignments</legend><div id="assignmentChoices">Loading…</div></fieldset>`;
+  if (state.page === "assignments") return `<label>Assignment type<select id="mode"><option value="combined">All activities</option><option value="scored">Scored</option><option value="self_assessment">Self-assessment</option></select></label>`;
   return "";
 }
 
 function bindPageFilters() {
   if (el("interval")) { el("interval").value = state.interval; el("interval").onchange = event => { state.interval = event.target.value; loadPage(); }; }
-  if (el("mode")) { el("mode").value = state.mode; el("mode").onchange = event => { state.mode = event.target.value; state.assignments.clear(); loadPage(); }; }
+  if (el("mode")) { el("mode").value = state.mode; el("mode").onchange = event => { state.mode = event.target.value; loadPage(); }; }
 }
 
 async function retrain(event) {
@@ -160,20 +167,6 @@ async function retrain(event) {
     await loadPage();
   } catch (error) { showMessage(error.message); }
   finally { if (button.isConnected) { button.disabled = false; button.textContent = originalText; } }
-}
-
-async function loadAssignmentOptions() {
-  const picker = el("assignmentChoices");
-  if (!picker) return;
-  const options = await api(`/v1/assignment-options?${currentParams({ mode: state.mode })}`);
-  const valid = new Set(options.map(item => item.ref));
-  state.assignments = new Set([...state.assignments].filter(ref => valid.has(ref)));
-  picker.innerHTML = options.length ? options.map(item => `<label><input type="checkbox" value="${escapeHtml(item.ref)}" ${state.assignments.has(item.ref) ? "checked" : ""}><span>${escapeHtml(item.assessment_key || item.name)}</span></label>`).join("") : `<span class="unavailable">No assignments available</span>`;
-  picker.querySelectorAll("input").forEach(input => input.onchange = () => {
-    if (staticMode) state.assignments.clear();
-    input.checked ? state.assignments.add(input.value) : state.assignments.delete(input.value);
-    loadPage();
-  });
 }
 
 function showMessage(message = "") {
@@ -193,13 +186,13 @@ async function loadPage() {
   if (state.page === "engagement") extra.interval = state.interval;
   if (state.page === "assignments") {
     extra.mode = state.mode;
-    try { await loadAssignmentOptions(); } catch (error) { showMessage(error.message); }
-    if (requestId !== pageRequest) return;
-    if (state.assignments.size) extra.assignments = [...state.assignments].join(",");
   }
-  if (state.page === "insights") extra.target = state.explorationTarget;
   try {
     const data = await api(`/v1/${state.page}?${currentParams(extra)}`);
+    if (requestId !== pageRequest) return;
+    await chartNotes.load();
+    const engagementComparison = state.page === "engagement"
+      ? await api(`/v1/engagement?${new URLSearchParams({course:state.course,interval:state.interval})}`) : null;
     if (requestId !== pageRequest) return;
     const models = state.page === "insights" ? await api(`/v1/models?${new URLSearchParams({course: state.course})}`) : null;
     if (requestId !== pageRequest) return;
@@ -207,14 +200,14 @@ async function loadPage() {
     clearSpecialPage(el);
     el("modelPanel").innerHTML = "";
     if (state.page === "insights") {
-      renderInsightsPage(data, models, {state, metrics:el("metrics"), coverage:el("coverage"), tables:el("tables"), notes:el("notes"), reload:loadPage, retrain, staticMode});
-    } else if (!renderSpecialPage(data, { state, el })) {
+      renderInsightsPage(data, models, {state, metrics:el("metrics"), coverage:el("coverage"), tables:el("tables"), notes:el("notes"), cohort:el("cohort"), reload:loadPage, retrain, staticMode, enhance:chartNotes.enhance});
+    } else if (!renderSpecialPage(data, { state, el, engagementComparison, enhance:chartNotes.enhance })) {
       renderMetrics(data.metrics);
       el("coverage").innerHTML = "";
       el("tables").innerHTML = renderTables(data);
       el("notes").innerHTML = data.notes?.length ? `<div class="panel notes"><h3>Definitions and limitations</h3><ul>${data.notes.map(note => `<li>${escapeHtml(note)}</li>`).join("")}</ul></div>` : "";
     }
-    if (state.page === "data-rules") await renderRules();
+    chartNotes.enhance();
   } catch (error) {
     if (requestId !== pageRequest) return;
     showMessage(error.message);
@@ -222,31 +215,21 @@ async function loadPage() {
   } finally { if (requestId === pageRequest) document.querySelector("main").classList.remove("loading"); }
 }
 
-async function renderRules() {
-  const rules = await api(`/v1/rules?${currentParams()}`);
-  const rows = rules.rules.map(rule => ({
-    label: rule.version,
-    dimensions: { course: rule.course, offering: rule.offering ? offeringLabel(rule.offering) : "Course default", status: rule.status, enabled: String(rule.enabled), pass_threshold: String(rule.pass_threshold) },
-    metrics: {}
-  }));
-  el("tables").insertAdjacentHTML("afterbegin", renderRows("Assessment rules", rows, true));
-}
-
 function populateOfferings() {
   const options = state.catalog.offerings.filter(item => item.course === state.course)
     .sort((a, b) => String(b.starts_on || "").localeCompare(String(a.starts_on || "")) || a.code.localeCompare(b.code));
-  const assignmentPage = state.page === "assignments";
-  el("offering").innerHTML = `${assignmentPage ? "" : '<option value="">All teaching periods</option>'}${options.map(item =>
-    `<option value="${escapeHtml(item.code)}">${escapeHtml(offeringLabel(item.code))} · ${escapeHtml(item.starts_on || "Date unknown")}</option>`).join("")}`;
-  if (!options.some(item => item.code === state.offering)) state.offering = assignmentPage ? options[0]?.code || "" : "";
-  if (assignmentPage && !state.offering) state.offering = options[0]?.code || "";
+  const allOption = ["overview", "data-rules"].includes(state.page) ? '<option value="">All teaching periods</option>' : "";
+  el("offering").innerHTML = allOption + options.map(item =>
+    `<option value="${escapeHtml(item.code)}">${escapeHtml(offeringLabel(item.code))} · ${escapeHtml(item.starts_on || "Date unknown")}</option>`).join("");
+  if (state.page === "data-rules") state.offering = "";
+  else if (!options.some(item => item.code === state.offering) && !(state.page === "overview" && !state.offering)) state.offering = options[0]?.code || "";
   el("offering").value = state.offering;
 }
 
 function syncOfferingControl() {
-  const pooled = state.page === "insights";
+  const pooled = ["insights", "data-rules"].includes(state.page);
   el("offering").disabled = pooled;
-  el("offering").value = pooled ? "" : state.offering;
+  el("offering").value = state.offering;
 }
 
 async function start() {
@@ -261,12 +244,11 @@ async function start() {
     document.querySelector("nav button.active")?.classList.remove("active");
     document.querySelector(`nav button[data-page="${state.page}"]`)?.classList.add("active");
     syncOfferingControl();
-    el("course").onchange = event => { state.course = event.target.value; state.offering = ""; state.assignments.clear(); populateOfferings(); syncOfferingControl(); loadPage(); };
-    el("offering").onchange = event => { state.offering = event.target.value; state.assignments.clear(); loadPage(); };
+    el("course").onchange = event => { state.course = event.target.value; state.offering = ""; populateOfferings(); syncOfferingControl(); loadPage(); };
+    el("offering").onchange = event => { state.offering = event.target.value; loadPage(); };
     document.querySelectorAll("nav button").forEach(button => button.onclick = () => {
       document.querySelector("nav button.active")?.classList.remove("active");
       button.classList.add("active"); state.page = button.dataset.page; location.hash = state.page;
-      if (state.page === "outcomes") state.offering = "";
       populateOfferings(); syncOfferingControl(); loadPage();
     });
     el("connection").textContent = staticMode

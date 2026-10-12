@@ -1,8 +1,9 @@
-"""Export the live aggregate API as a portable, read-only dashboard snapshot."""
+"""Export live aggregate data as a portable dashboard snapshot with editable notes."""
 from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 from datetime import datetime, timezone
 import json
 import logging
@@ -23,7 +24,7 @@ from app.models import Student
 FRONTEND = PROJECT_ROOT / "frontend"
 DEFAULT_SITE = PROJECT_ROOT / "static_dashboard"
 DEFAULT_DEMO = PROJECT_ROOT / "demo" / "index.html"
-ASSETS = ("app.js", "page-visuals.js", "insights-visuals.js", "styles.css")
+ASSETS = ("app.js", "page-visuals.js", "insights-visuals.js", "chart-notes.js", "chart-copy.js", "submission-chart.js", "styles.css")
 FORBIDDEN_KEYS = {
     "student_id", "student_number", "identity_digest", "identity_hash", "response_id",
     "canvas_user_id", "account_name", "contact_name", "case_owner", "person_id",
@@ -62,11 +63,12 @@ def collect_snapshot(settings: Settings) -> dict:
         for course in catalog["courses"]:
             code = course["code"]
             offerings = [item["code"] for item in catalog["offerings"] if item["course"] == code]
+            get(client, "/v1/data-rules", {"course": code})
             scopes = [None, *offerings]
             for offering in scopes:
                 base = {"course": code, **({"offering": offering} if offering else {})}
-                for page in ("overview", "data-rules"):
-                    get(client, f"/v1/{page}", base)
+                get(client, "/v1/insight-notes", base)
+                get(client, "/v1/overview", base)
                 get(client, "/v1/rules", base)
                 for interval in ("day", "week", "month"):
                     get(client, "/v1/engagement", {**base, "interval": interval})
@@ -80,7 +82,8 @@ def collect_snapshot(settings: Settings) -> dict:
                         selections += grouped_assignment_refs(options)
                     for selection in dict.fromkeys(selections):
                         get(client, "/v1/assignments", {**assignment_params, "assignments": selection})
-            for target in ("all", "AT1", "AT2", "weighted_final", "badge"):
+            get(client, "/v1/insights", {"course": code})
+            for target in ("pass", "badge"):
                 get(client, "/v1/insights", {"course": code, "target": target})
             get(client, "/v1/models", {"course": code})
 
@@ -145,33 +148,47 @@ def write_site(snapshot: dict, output: Path) -> None:
         shutil.rmtree(temporary)
     temporary.mkdir()
     index = (FRONTEND / "index.html").read_text(encoding="utf-8")
+    snapshot_js = javascript_assignment(snapshot)
+    version = hashlib.sha256(snapshot_js.encode("utf-8")).hexdigest()[:12]
     index = re.sub(r'(<script type="module" src="app\.js\?[^\"]+"></script>)',
-        r'<script src="snapshot.js"></script>\n  \1', index)
+        lambda match: f'<script src="snapshot.js?v={version}"></script>\n  {match.group(1)}', index)
     (temporary / "index.html").write_text(index, encoding="utf-8")
-    (temporary / "snapshot.js").write_text(javascript_assignment(snapshot), encoding="utf-8")
+    (temporary / "snapshot.js").write_text(snapshot_js, encoding="utf-8")
     for name in ASSETS:
         shutil.copy2(FRONTEND / name, temporary / name)
     (temporary / "snapshot-manifest.json").write_text(
         json.dumps(snapshot["meta"], indent=2, ensure_ascii=False), encoding="utf-8")
+    (temporary / "offline-shell.html").write_text(offline_shell(), encoding="utf-8")
     if output.exists():
         shutil.rmtree(output)
     temporary.replace(output)
 
 
-def write_offline_html(snapshot: dict, output: Path) -> None:
-    output.parent.mkdir(parents=True, exist_ok=True)
+def offline_shell() -> str:
+    """Bundle relative JS imports recursively so downloaded notes need no assets."""
+    modules = {}
+    pattern = re.compile(r'"\./([\w-]+\.js)\?[^\"]+"')
+
+    def bundle(name):
+        if name not in modules:
+            source = (FRONTEND / name).read_text(encoding="utf-8")
+            source = pattern.sub(lambda match: json.dumps(bundle(match.group(1))), source)
+            modules[name] = "data:text/javascript;base64," + base64.b64encode(source.encode("utf-8")).decode("ascii")
+        return modules[name]
+
+    app = (FRONTEND / "app.js").read_text(encoding="utf-8")
+    app = pattern.sub(lambda match: json.dumps(bundle(match.group(1))), app)
     html = (FRONTEND / "index.html").read_text(encoding="utf-8")
     css = (FRONTEND / "styles.css").read_text(encoding="utf-8")
-    modules = {}
-    for name in ("page-visuals.js", "insights-visuals.js"):
-        source = (FRONTEND / name).read_bytes()
-        modules[name] = "data:text/javascript;base64," + base64.b64encode(source).decode("ascii")
-    app = (FRONTEND / "app.js").read_text(encoding="utf-8")
-    app = re.sub(r'"\.\/page-visuals\.js\?[^\"]+"', json.dumps(modules["page-visuals.js"]), app)
-    app = re.sub(r'"\.\/insights-visuals\.js\?[^\"]+"', json.dumps(modules["insights-visuals.js"]), app)
     html = re.sub(r'<link rel="stylesheet"[^>]+>', lambda _: f"<style>\n{css}\n</style>", html)
-    scripts = f"<script>{javascript_assignment(snapshot)}</script>\n  <script type=\"module\">\n{app}\n</script>"
-    html = re.sub(r'<script type="module" src="app\.js\?[^\"]+"></script>', lambda _: scripts, html)
+    scripts = '<script id="dashboardSnapshot"></script>\n<script type="module">\n' + app + '\n</script>'
+    return re.sub(r'<script type="module" src="app\.js\?[^\"]+"></script>', lambda _: scripts, html)
+
+
+def write_offline_html(snapshot: dict, output: Path) -> None:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    html = offline_shell().replace('<script id="dashboardSnapshot"></script>',
+        '<script id="dashboardSnapshot">' + javascript_assignment(snapshot) + '</script>')
     output.write_text(html, encoding="utf-8")
 
 

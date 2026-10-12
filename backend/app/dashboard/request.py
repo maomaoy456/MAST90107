@@ -10,7 +10,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("page", choices=["catalog", "assignment-options", "overview", "engagement", "assignments", "outcomes", "insights", "models", "data-rules", "rules"])
     parser.add_argument("--course")
-    parser.add_argument("--target", choices=["all", "AT1", "AT2", "weighted_final", "badge"])
+    parser.add_argument("--target", choices=["all", "pass", "badge"])
     parser.add_argument("--offering")
     parser.add_argument("--offerings")
     parser.add_argument("--assignments")

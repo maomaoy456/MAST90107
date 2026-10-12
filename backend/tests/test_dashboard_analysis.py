@@ -36,7 +36,7 @@ def test_unknown_view_dates_and_small_temporal_groups_are_visible(dashboard):
         assert any(r['dimensions']['period'] == 'unknown' for r in page['tables']['activity_by_start_date'])
 
 
-def test_business_pass_other_breakdown_and_assignment_creation_timing(dashboard):
+def test_business_pass_other_breakdown_and_assignment_deadline_timing(dashboard):
     client, session, offering = dashboard
     offering.starts_on = date(2025, 3, 1)
     event = session.scalar(select(EngagementEvent))
@@ -58,8 +58,25 @@ def test_business_pass_other_breakdown_and_assignment_creation_timing(dashboard)
     status = {row['dimensions']['band']: row['metrics']['students']['value'] for row in assignment['tables']['assessment_pass_status']}
     assert status == {'below_pass_mark': 15, 'passed': 5}
     curve = assignment['tables']['assignment_cumulative_submission']
-    day_ten = next(row for row in curve if row['dimensions']['days_from_creation'] == '10')
-    assert day_ten['metrics']['submitted_pct']['value'] == 100
+    first_observed = next(row for row in curve if row['dimensions']['days_from_deadline'] == '-9')
+    assert first_observed['metrics']['submitted_pct']['value'] == 100
+    assert all('days_from_creation' not in row['dimensions'] for row in curve)
+
+
+def test_assignment_deadline_after_course_end_is_flagged(dashboard):
+    client, session, offering = dashboard
+    offering.ends_on = date(2025, 4, 1)
+    item = session.scalar(select(Assignment).where(Assignment.source_key == 'AT2'))
+    item.assessment_key, item.mapping_status = 'AT2', 'confirmed'
+    for row in session.scalars(select(AssignmentSubmission).where(AssignmentSubmission.assignment_id == item.id)):
+        row.submitted_at = datetime(2025, 4, 1, 0)
+        row.source_fields = dict(row.source_fields, due_at='2025-06-01T00:00:00Z')
+    session.commit()
+    page = client.get('/api/v1/assignments', params={'mode': 'scored'}, headers=HEADERS).json()
+    schedule = next(row for row in page['tables']['assignment_schedule']
+                    if row['dimensions']['assessment_key'] == 'AT2')
+    assert schedule['dimensions']['deadline_status'] == 'source_date_after_course_end'
+    assert schedule['dimensions']['deadline_days_after_course_end'] == '61'
 
 
 def test_assignment_selection_preserves_names_and_null_attempts(dashboard):
@@ -97,6 +114,10 @@ def test_new_course_catalog_and_all_page_scope_switches(dashboard):
     catalog = client.get('/api/v1/catalog', headers=HEADERS).json()
     assert any(c['code'] == 'NEW100' for c in catalog['courses'])
     for page in catalog['pages']:
+        if page == 'data-rules':
+            assert client.get('/api/v1/data-rules', params={'course': 'NEW100'}, headers=HEADERS).status_code == 200
+            assert client.get('/api/v1/data-rules', params={'course': 'NEW100', 'offering': other.offering_code}, headers=HEADERS).status_code == 422
+            continue
         assert client.get('/api/v1/' + page, params={'course': 'NEW100', 'offering': offering.offering_code}, headers=HEADERS).status_code == 404
         response = client.get('/api/v1/' + page, params={'course': 'NEW100', 'offering': other.offering_code}, headers=HEADERS)
         assert response.status_code == 200
@@ -156,7 +177,7 @@ def test_engagement_in_another_offering_does_not_change_badge_assignment_match(d
     page = client.get('/api/v1/assignments', params={'offering': offering.offering_code}, headers=HEADERS).json()
     assert page['metrics']['active_badge_students']['value'] == 10
     states = {r['key']: r['metrics']['students']['value'] for r in page['tables']['badge_status']}
-    assert states['needs_review'] == 0
+    assert states['no_badge_record_or_other'] == 0
 
 
 def test_register_new_course_is_idempotent_and_rejects_name_conflict(session):

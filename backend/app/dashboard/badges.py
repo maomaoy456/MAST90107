@@ -1,4 +1,4 @@
-"""Match Badge records to the Assignment population for each teaching period."""
+"""Match Badge records to the Assignment cohort for each teaching period."""
 from collections import defaultdict
 
 from app.dashboard.academic import academic_records
@@ -31,25 +31,23 @@ def resolve_awards(data):
 
 def add_badges(page, data, scope, reason):
     """Append course-pass and Badge comparisons to the Assignments page."""
-    courses = {data.offerings[o].course_id for o in scope}
     population = {
         (row.student_id, data.assignments[row.assignment_id].offering_id)
         for row in selected_submissions(data, scope)
     }
-    valid, revoked, ambiguous = set(), set(), set()
-    for award, course, offering, status in resolve_awards(data):
+    valid, revoked = set(), set()
+    for award, _, offering, _ in resolve_awards(data):
         if offering in scope:
             member = (award.student_id, offering)
             (revoked if award.revoked else valid).add(member)
-        elif status == "multiple_offerings" and course in courses:
-            ambiguous.update(pair for pair in population
-                             if pair[0] == award.student_id and data.offerings[pair[1]].course_id == course)
 
     states = {
         "valid": valid,
         "revoked_only": revoked - valid,
-        "needs_review": ambiguous - valid - revoked,
-        "no_matched_award": population - valid - revoked - ambiguous,
+        # The dashboard cannot distinguish a genuinely unclaimed Badge from
+        # an award that cannot be placed in one teaching period. Present both
+        # as one neutral evidence gap rather than implying a separate outcome.
+        "no_badge_record_or_other": population - valid - revoked,
     }
     academic = academic_records(data, scope)
     passed = {pair for pair in population if pair in academic and academic[pair]["state"] == "pass"}
@@ -92,6 +90,6 @@ def add_badges(page, data, scope, reason):
             }))
     page.notes += [
         "Badge records are matched through student identity to exactly one Assignment teaching period in the same course; award dates do not assign teaching periods.",
-        "Active Badge, revoked-only evidence and no Badge record are separate states. A separate active award takes precedence over revoked history.",
-        "Course pass and Badge evidence use the same Assignment population. Differences can reflect claiming, export or matching gaps and are not manually balanced.",
+        "Active Badge and revoked-only evidence are separate states. Missing or teaching-period-ambiguous evidence is grouped as No Badge record found or other; a separate active award takes precedence over revoked history.",
+        "Course pass and Badge evidence use the same Assignment cohort. Differences can reflect claiming, export or matching gaps and are not manually balanced.",
     ]

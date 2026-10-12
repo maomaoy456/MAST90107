@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MPE Course Platform</title>
-  <link rel="stylesheet" href="styles.css?v=20260924-3">
+  <link rel="stylesheet" href="styles.css?v=20260930-7">
 </head>
 <body>
   <header>
@@ -27,7 +27,7 @@
         <button data-page="engagement">Engagement</button>
         <button data-page="assignments">Assignments</button>
         <button data-page="outcomes">Feedback</button>
-        <button data-page="insights">Insights</button>
+        <button data-page="insights">Summary &amp; Recommendations</button>
         <button data-page="data-rules">Data & Rules</button>
       </nav>
     </aside>
@@ -38,7 +38,7 @@
           <h2 id="pageTitle">Overview</h2>
           <p id="cohort"></p>
         </div>
-        <div id="pageFilters" class="filters"></div>
+        <div class="page-actions"><button id="downloadInsightHtml" type="button" hidden>Download updated HTML</button><div id="pageFilters" class="filters"></div></div>
       </section>
       <div id="message" class="message" hidden></div>
       <section id="metrics" class="cards"></section>
@@ -48,7 +48,7 @@
       <section id="notes"></section>
     </main>
   </div>
-  <script type="module" src="app.js?v=20260924-3"></script>
+  <script type="module" src="app.js?v=20260930-7"></script>
 </body>
 </html>
 

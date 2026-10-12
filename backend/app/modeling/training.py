@@ -19,9 +19,9 @@ from sqlalchemy import select
 
 from app.dashboard.data import Snapshot
 from app.models import Course, ModelRun
-from app.modeling.features import BADGE_LABELS, GRADE_LABELS, build_training_data, data_signature
+from app.modeling.features import BADGE_LABELS, PASS_LABELS, build_training_data, data_signature
 
-MODEL_VERSION = "model-v1"
+MODEL_VERSION = "model-v2"
 RANDOM_SEED = 20260914
 MODEL_CONFIG = {
     "model_version": MODEL_VERSION, "folds": 3, "seed": RANDOM_SEED,
@@ -125,7 +125,7 @@ def train(session, settings, course_code, target):
     course = session.scalar(select(Course).where(Course.code == course_code))
     if course is None:
         raise ValueError("unknown_course")
-    if target not in {"AT1", "AT2", "weighted_final", "badge"}:
+    if target not in {"pass", "badge"}:
         raise ValueError("unknown_target")
     data = Snapshot(session)
     signature = data_signature(data, course.id, target, settings.badge_data_as_of, MODEL_CONFIG)
@@ -142,7 +142,7 @@ def train(session, settings, course_code, target):
             reason, dataset = "badge_data_as_of_required", None
         else:
             dataset = build_training_data(data, course.id, target, settings.badge_data_as_of)
-            expected = BADGE_LABELS if target == "badge" else GRADE_LABELS
+            expected = BADGE_LABELS if target == "badge" else PASS_LABELS
             reason, counts, folds, split_seed = readiness(dataset, expected)
         if reason:
             run.status, run.finished_at = "insufficient", datetime.now(timezone.utc)

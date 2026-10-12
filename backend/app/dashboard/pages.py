@@ -9,6 +9,7 @@ from app.dashboard.survey import add_survey
 from app.dashboard.support import add_support
 from app.dashboard.assignment_time import add_assignment_time, add_assignment_deadlines
 from app.dashboard.course_timing import add_engagement_stages
+from app.dashboard.reference import build_reference
 
 from app.dashboard.contracts import Page, TableRow, Metric
 from app.dashboard.privacy import metric
@@ -48,18 +49,7 @@ def make_page(name, data, filters):
         build_insights(page, data, scope, reason)
     elif name == "data-rules":
         page.cohort = "metadata_only"
-        page.tables["source_quality"] = []
-        for source, batch in data.batches.items():
-            summary = batch.summary or {}
-            members = a if source == "assignment" else e if source == "engagement" else {
-                r.student_id for r in data.badges if r.student_id is not None}
-            fields = {key: summary.get(key) for key in ("accepted_rows", "rejected_rows", "warning_rows")}
-            # These are whole-file diagnostics, never pretend they are filtered row totals.
-            page.tables["source_quality"].append(TableRow(key=source, label=source + " (whole snapshot)",
-                metrics={k: metric(v, members) for k, v in fields.items()}))
-        page.notes += ["Import diagnostics are available via the local ingestion report command; raw errors/rows are not exposed.",
-            "Rule history is available from /api/v1/rules; extended source logs are deferred.",
-            "First-view date is distinct from intake month; exact offering boundaries remain unconfirmed where absent."]
+        build_reference(page, data, scope)
     required = {"engagement": {"engagement"}, "assignments": {"assignment"}}.get(name, set())
     if required - data.batches.keys():
         page.metrics = {key: metric(None, set()) for key in page.metrics}

@@ -64,6 +64,16 @@ def test_six_pages_and_catalog_contract(dashboard):
     assert client.get("/api/v1/overview", headers=HEADERS).json()["metrics"]["assignment_students"]["value"] == 20
 
 
+def test_data_rules_is_course_wide_reference(dashboard):
+    client, _, offering = dashboard
+    result = client.get("/api/v1/data-rules", params={"course": "0AUTI0001"}, headers=HEADERS)
+    assert result.status_code == 200
+    tables = result.json()["tables"]
+    assert {"data_sources", "glossary", "calculation_rules", "assessment_rules", "data_limitations"} <= tables.keys()
+    assert any(row["label"] == "Assignment cohort" for row in tables["glossary"])
+    assert client.get("/api/v1/data-rules", params={"course": "0AUTI0001", "offering": offering.offering_code}, headers=HEADERS).status_code == 422
+
+
 def test_academic_tables_only_appear_on_relevant_pages(dashboard):
     client, _, _ = dashboard
     for page_name in ("overview", "assignments"):
@@ -183,3 +193,39 @@ def test_badges_resolve_from_assignment_membership_without_course_dates(dashboar
     reconciliation = {row["key"]: row["metrics"]["students"]["value"] for row in response.json()["tables"]["badge_course_reconciliation"]}
     assert reconciliation["passed_and_badge"] == 0
     assert reconciliation["badge_recorded_pass_not_confirmed"] == 20
+
+
+def test_insight_note_is_saved_per_offering_and_can_be_updated(dashboard):
+    client, _, offering = dashboard
+    params = {"course": "0AUTI0001", "offering": offering.offering_code,
+              "chart_key": "assignment_submission_timing"}
+    path = "/api/v1/insight-notes"
+    assert client.get(path, params=params, headers=HEADERS).json()["note"] == ""
+    body = params | {"note": "Most submissions happened near the deadline."}
+    created = client.put(path, json=body, headers=HEADERS)
+    assert created.status_code == 200
+    assert created.json()["note"] == body["note"]
+    assert client.get(path, params=params, headers=HEADERS).json()["note"] == body["note"]
+    updated = client.put(path, json=body | {"note": "Updated note."}, headers=HEADERS)
+    assert updated.status_code == 200 and updated.json()["note"] == "Updated note."
+    assert client.put(path, json=body | {"note": "x" * 2001}, headers=HEADERS).status_code == 422
+
+
+def test_chart_notes_separate_chart_offering_and_course_scopes(dashboard):
+    client, _, offering = dashboard
+    path = "/api/v1/insight-notes"
+    scope = {"course": "0AUTI0001", "offering": offering.offering_code}
+    for key, message in (("outcomes.topic_feedback_statistics", "Topic insight"),
+                         ("engagement.page_views_by_teaching_week", "Week insight")):
+        assert client.put(path, json=scope | {"chart_key": key, "note": message}, headers=HEADERS).status_code == 200
+    whole_course = {"course": "0AUTI0001", "chart_key": "overview.data_availability", "note": "All periods"}
+    assert client.put(path, json=whole_course, headers=HEADERS).status_code == 200
+    listed = client.get(path, params=scope, headers=HEADERS).json()["notes"]
+    assert {row["note"] for row in listed} == {"Topic insight", "Week insight"}
+    pooled = client.get(path, params={"course": "0AUTI0001"}, headers=HEADERS).json()["notes"]
+    assert len(pooled) == 1 and pooled[0]["note"] == "All periods" and pooled[0]["offering"] == ""
+    assert client.get(path, params=scope).status_code == 401
+    assert client.put(path, json=whole_course | {"chart_key": "<script>"}, headers=HEADERS).status_code == 422
+    assert client.put(path, json=whole_course | {"offering": "UNKNOWN"}, headers=HEADERS).status_code == 404
+    assert client.put(path, json=whole_course | {"note": ""}, headers=HEADERS).status_code == 200
+    assert client.get(path, params={"course": "0AUTI0001"}, headers=HEADERS).json()["notes"][0]["note"] == ""

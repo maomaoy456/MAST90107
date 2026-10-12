@@ -13,11 +13,12 @@ from app.db import get_session
 from app.dashboard.contracts import (Filters, Page, RuleUpdate, Catalog, RuleList, RuleSaved,
     AssignmentOption, ModelTrainRequest, ModelRunView, ModelRunList)
 from app.dashboard.assignments import assignment_options
+from app.dashboard.chart_notes import router as notes_router
 from app.dashboard.data import Snapshot
 from app.dashboard.pages import make_page
 from app.dashboard.calendar import phase, today
 from app.dashboard.privacy import metric
-from app.models import AssessmentRule, Assignment, CourseOffering
+from app.models import AssessmentRule, Assignment, CourseOffering, Course
 from app.modeling.features import data_signature
 from app.modeling.training import MODEL_CONFIG, artifact_valid, train
 
@@ -33,6 +34,7 @@ def authenticated(request: Request, key: str | None = Security(key_header)):
 
 
 router = APIRouter(prefix="/api/v1", dependencies=[Depends(authenticated)])
+router.include_router(notes_router)
 
 
 def filters(request: Request):
@@ -81,6 +83,8 @@ def page_endpoint(name):
             raise HTTPException(422)
         if name != "engagement" and query.interval != "day":
             raise HTTPException(422)
+        if name == "data-rules" and (query.offering or query.offerings):
+            raise HTTPException(422)
         data = Snapshot(session)
         return make_page(name, data, query)
     endpoint.__name__ = name.replace("-", "_")
@@ -102,7 +106,7 @@ for name in ("overview", "engagement", "assignments", "outcomes", "insights", "d
             "schema": {"type": "string", "enum": ["combined", "scored", "self_assessment"], "default": "combined"}})
     if name == "insights":
         parameters.append({"name": "target", "in": "query", "schema": {"type": "string",
-            "enum": ["all", "AT1", "AT2", "weighted_final", "badge"], "default": "all"}})
+            "enum": ["all", "pass", "badge"], "default": "all"}})
     router.add_api_route("/" + name, page_endpoint(name), methods=["GET"], response_model=Page,
                         openapi_extra={"parameters": parameters})
 
@@ -155,7 +159,7 @@ def models(request: Request, session=Depends(get_session)):
     if len(request.query_params.multi_items()) != len(request.query_params) or set(request.query_params) - {"course", "target"}:
         raise HTTPException(422)
     course_code, target = request.query_params.get("course"), request.query_params.get("target")
-    if target and target not in {"AT1", "AT2", "weighted_final", "badge"}:
+    if target and target not in {"pass", "badge"}:
         raise HTTPException(422)
     data = Snapshot(session)
     courses = {c.id: c for c in data.courses.values() if not course_code or c.code == course_code}
